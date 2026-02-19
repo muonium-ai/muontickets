@@ -49,3 +49,19 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
 - Keep ticket updates small, frequent, and deterministic.
 - Always run validation before commit/push.
 - Keep one active ticket at a time unless team policy allows higher WIP.
+
+### Backlog shape (throughput-first)
+
+- Avoid creating hundreds of micro-tickets; this usually hurts throughput.
+- Too many tickets increase context switching, duplicate work, and stale status churn.
+- Prefer a layered backlog:
+	- a small set of epics,
+	- each epic with a few implementation tickets,
+	- optional checklist items inside each ticket.
+- Keep only ~10–30 `ready` tickets active at a time.
+- Park overflow work in a backlog/archive doc and promote items when capacity opens.
+- Use strict ticket templates with required fields:
+	- goal,
+	- acceptance criteria,
+	- dependencies,
+	- test plan.
