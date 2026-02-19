@@ -1,0 +1,44 @@
+# MuonTickets Makefile snippet
+# Usage (in your project root Makefile):
+#   include muontickets/Makefile.snippet
+#
+# Assumptions:
+# - MuonTickets is installed under tickets/mt/muontickets
+# - tickets/ folder exists in repo root
+
+UV ?= uv
+MT_PATH ?= $(firstword $(wildcard tickets/mt/muontickets/mt.py) $(wildcard tickets/mt/muontickets/muontickets/mt.py) $(wildcard muontickets/mt.py))
+MT ?= $(UV) run python3 $(MT_PATH)
+
+.PHONY: tickets-validate tickets-list tickets-ready tickets-claimed tickets-show tickets-pick tickets-graph tickets-export tickets-stats
+
+tickets-validate:
+	@$(MT) validate
+
+tickets-list:
+	@$(MT) ls
+
+tickets-ready:
+	@$(MT) ls --status ready
+
+tickets-claimed:
+	@$(MT) ls --status claimed
+
+# Usage: make tickets-show ID=T-000123
+tickets-show:
+	@if [ -z "$(ID)" ]; then echo "Usage: make tickets-show ID=T-000123"; exit 2; fi
+	@$(MT) show $(ID)
+
+# Usage: make tickets-pick OWNER=agent-1 LABEL=wasm
+tickets-pick:
+	@if [ -z "$(OWNER)" ]; then echo "Usage: make tickets-pick OWNER=agent-1 [LABEL=wasm]"; exit 2; fi
+	@if [ -z "$(LABEL)" ]; then $(MT) pick --owner $(OWNER); else $(MT) pick --owner $(OWNER) --label $(LABEL); fi
+
+tickets-graph:
+	@$(MT) graph --mermaid
+
+tickets-export:
+	@$(MT) export --format json
+
+tickets-stats:
+	@$(MT) stats

@@ -1,0 +1,31 @@
+#!/bin/sh
+# MuonTickets pre-commit hook
+# Install:
+#   cp muontickets/hooks/pre-commit .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# Fast checks only. CI should run full suite.
+
+echo "[muontickets] validating tickets..."
+
+if [ -f "tickets/mt/muontickets/mt.py" ]; then
+  MT_PATH="tickets/mt/muontickets/mt.py"
+elif [ -f "tickets/mt/muontickets/muontickets/mt.py" ]; then
+  MT_PATH="tickets/mt/muontickets/muontickets/mt.py"
+else
+  echo "[muontickets] ❌ Could not find mt.py under tickets/mt/muontickets"
+  exit 2
+fi
+
+if command -v uv >/dev/null 2>&1; then
+  uv run python3 "$MT_PATH" validate
+else
+  python3 "$MT_PATH" validate
+fi
+rc=$?
+if [ $rc -ne 0 ]; then
+  echo "[muontickets] ❌ Ticket validation failed. Commit aborted."
+  exit $rc
+fi
+echo "[muontickets] ✅ Ticket validation OK."
+exit 0

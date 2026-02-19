@@ -1,0 +1,16 @@
+[project]
+name = "muontickets"
+version = "0.1.0"
+description = "Git-native, file-based ticketing system for agent swarms"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = false

@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SwarmTickets Ticket Frontmatter",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "status",
+    "priority",
+    "type",
+    "labels",
+    "owner",
+    "created",
+    "updated",
+    "depends_on",
+    "branch"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^T-\\d{6}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ready",
+        "claimed",
+        "blocked",
+        "needs_review",
+        "done"
+      ]
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "p0",
+        "p1",
+        "p2"
+      ]
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "spec",
+        "code",
+        "tests",
+        "docs",
+        "refactor",
+        "chore"
+      ]
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "owner": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "updated": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^T-\\d{6}$"
+      },
+      "default": []
+    },
+    "branch": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "effort": {
+      "type": "string",
+      "enum": [
+        "xs",
+        "s",
+        "m",
+        "l"
+      ],
+      "default": "s"
+    },
+    "score": {
+      "type": "number"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    }
+  }
+}
