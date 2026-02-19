@@ -22,3 +22,33 @@ uv sync
 uv run python3 tickets/mt/muontickets/muontickets/mt.py init
 uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 ```
+
+## For Agents: Ticket Workflow
+
+Run these from the project root where MuonTickets is installed.
+
+```bash
+# 1) Pull latest board state
+git pull
+
+# 2) Pick the best ready ticket and claim it
+uv run python3 tickets/mt/muontickets/muontickets/mt.py pick --owner agent-1
+
+# 3) Inspect your claimed ticket(s)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py ls --status claimed --owner agent-1
+
+# 4) Add progress updates while implementing
+uv run python3 tickets/mt/muontickets/muontickets/mt.py comment T-000001 "Implemented parser and added tests"
+
+# 5) Move ticket to review when done coding
+uv run python3 tickets/mt/muontickets/muontickets/mt.py set-status T-000001 needs_review
+
+# 6) Validate board consistency before commit/push
+uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
+```
+
+After merge, mark the ticket complete:
+
+```bash
+uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
+```
