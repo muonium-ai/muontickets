@@ -43,6 +43,8 @@ import datetime as _dt
 import json
 import os
 import re
+import shutil
+import sqlite3
 import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -157,6 +159,15 @@ def find_repo_root(start: Optional[str] = None) -> str:
 def tickets_dir(repo_root: str) -> str:
     return os.path.join(repo_root, "tickets")
 
+def archive_dir(repo_root: str) -> str:
+    return os.path.join(repo_root, "archive")
+
+def backlogs_dir(repo_root: str) -> str:
+    return os.path.join(repo_root, "backlogs")
+
+def last_ticket_id_path(repo_root: str) -> str:
+    return os.path.join(tickets_dir(repo_root), "last_ticket_id")
+
 def schema_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.json")
 
@@ -204,6 +215,72 @@ def iter_ticket_files(tdir: str) -> List[str]:
 
 def ensure_tickets_dir(tdir: str) -> None:
     os.makedirs(tdir, exist_ok=True)
+
+def iter_ticket_files_recursive(root_dir: str) -> List[str]:
+    if not os.path.isdir(root_dir):
+        return []
+    out: List[str] = []
+    for root, _dirs, files in os.walk(root_dir):
+        for name in files:
+            if TICKET_FILE_RE.match(name):
+                out.append(os.path.join(root, name))
+    return sorted(out)
+
+def all_ticket_paths(repo_root: str) -> List[str]:
+    paths: List[str] = []
+    for root in (tickets_dir(repo_root), archive_dir(repo_root), backlogs_dir(repo_root)):
+        paths.extend(iter_ticket_files_recursive(root))
+    # de-duplicate while preserving sorted order
+    return sorted(set(paths))
+
+def extract_ticket_number(ticket_id: str) -> int:
+    if not ID_RE.match(ticket_id):
+        raise ValueError(f"Invalid ticket id: {ticket_id}")
+    return int(ticket_id.split("-")[1])
+
+def ticket_id_from_path(path: str) -> Optional[str]:
+    m = TICKET_FILE_RE.match(os.path.basename(path))
+    if not m:
+        return None
+    return m.group(1)
+
+def scan_max_ticket_number(repo_root: str) -> int:
+    max_n = 0
+    for p in all_ticket_paths(repo_root):
+        tid = ticket_id_from_path(p)
+        if not tid:
+            continue
+        max_n = max(max_n, extract_ticket_number(tid))
+    return max_n
+
+def read_last_ticket_number(repo_root: str) -> Optional[int]:
+    state_file = last_ticket_id_path(repo_root)
+    if not os.path.exists(state_file):
+        return None
+    try:
+        raw = open(state_file, "r", encoding="utf-8").read().strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    if ID_RE.match(raw):
+        return extract_ticket_number(raw)
+    if re.fullmatch(r"\d+", raw):
+        return int(raw)
+    return None
+
+def write_last_ticket_number(repo_root: str, number: int) -> None:
+    ensure_tickets_dir(tickets_dir(repo_root))
+    with open(last_ticket_id_path(repo_root), "w", encoding="utf-8") as f:
+        f.write(f"T-{number:06d}\n")
+
+def next_ticket_id_for_repo(repo_root: str) -> str:
+    tracked = read_last_ticket_number(repo_root)
+    scanned = scan_max_ticket_number(repo_root)
+    base = max(tracked or 0, scanned)
+    nxt = base + 1
+    write_last_ticket_number(repo_root, nxt)
+    return f"T-{nxt:06d}"
 
 def next_ticket_id(tdir: str) -> str:
     max_n = 0
@@ -358,7 +435,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"tickets dir exists: {tdir}")
     # Create an example ticket if none exist
     if not iter_ticket_files(tdir):
-        tid = "T-000001"
+        tid = next_ticket_id_for_repo(repo)
         meta = normalize_meta({
             "id": tid,
             "title": "Example: replace this ticket",
@@ -386,6 +463,13 @@ This repository uses MuonTickets for agent-friendly coordination.
 """
         write_ticket(Ticket(path=os.path.join(tdir, f"{tid}.md"), meta=meta, body=body))
         print(f"created example ticket {tid}")
+    else:
+        # Keep state file in sync even when board already exists.
+        tracked = read_last_ticket_number(repo)
+        scanned = scan_max_ticket_number(repo)
+        if tracked is None or tracked < scanned:
+            write_last_ticket_number(repo, scanned)
+            print(f"updated {last_ticket_id_path(repo)} to T-{scanned:06d}")
     return 0
 
 def cmd_new(args: argparse.Namespace) -> int:
@@ -393,7 +477,7 @@ def cmd_new(args: argparse.Namespace) -> int:
     tdir = tickets_dir(repo)
     ensure_tickets_dir(tdir)
 
-    tid = next_ticket_id(tdir)
+    tid = next_ticket_id_for_repo(repo)
     title = args.title.strip()
 
     meta = normalize_meta({
@@ -563,6 +647,26 @@ def cmd_done(args: argparse.Namespace) -> int:
     t.meta = meta
     write_ticket(t)
     print(f"done {args.id}")
+    return 0
+
+def cmd_archive(args: argparse.Namespace) -> int:
+    repo = find_repo_root()
+    t = find_ticket_by_id(repo, args.id)
+    meta = normalize_meta(t.meta)
+
+    if meta.get("status") != "done" and not args.force:
+        eprint(f"Refusing to archive: status is {meta.get('status')!r} (expected 'done'). Use --force to override.")
+        return 2
+
+    target_dir = archive_dir(repo)
+    os.makedirs(target_dir, exist_ok=True)
+    dst = os.path.join(target_dir, os.path.basename(t.path))
+    if os.path.exists(dst):
+        eprint(f"Refusing to archive: destination already exists: {dst}")
+        return 2
+
+    shutil.move(t.path, dst)
+    print(f"archived {args.id} -> {os.path.relpath(dst, repo)}")
     return 0
 
 def validate_wip_limit(tickets: List[Ticket], max_claimed_per_owner: int) -> List[str]:
@@ -854,6 +958,154 @@ def cmd_pick(args: argparse.Namespace) -> int:
         print(f"picked {tid} (score {score:.1f}) -> claimed as {args.owner} (branch: {meta['branch']})")
     return 0
 
+def ticket_bucket(repo: str, path: str) -> str:
+    rel = os.path.relpath(path, repo)
+    if rel.startswith("tickets/"):
+        return "tickets"
+    if rel.startswith("archive/"):
+        return "archive"
+    if rel.startswith("backlogs/"):
+        return "backlogs"
+    return "other"
+
+def cmd_report(args: argparse.Namespace) -> int:
+    repo = find_repo_root()
+    db_path = args.db if os.path.isabs(args.db) else os.path.join(repo, args.db)
+    os.makedirs(os.path.dirname(db_path) or repo, exist_ok=True)
+
+    rows: List[Tuple[Any, ...]] = []
+    parse_errors: List[Tuple[str, str]] = []
+    for path in all_ticket_paths(repo):
+        rel = os.path.relpath(path, repo)
+        try:
+            t = read_ticket(path)
+        except Exception as ex:
+            parse_errors.append((rel, str(ex)))
+            continue
+
+        meta = normalize_meta(t.meta)
+        rows.append(
+            (
+                meta.get("id"),
+                meta.get("title"),
+                meta.get("status"),
+                meta.get("priority"),
+                meta.get("type"),
+                meta.get("effort"),
+                meta.get("owner"),
+                meta.get("created"),
+                meta.get("updated"),
+                meta.get("branch"),
+                json.dumps(meta.get("labels") or []),
+                json.dumps(meta.get("tags") or []),
+                json.dumps(meta.get("depends_on") or []),
+                rel,
+                ticket_bucket(repo, path),
+                1 if ticket_bucket(repo, path) == "archive" else 0,
+                t.body,
+            )
+        )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS tickets")
+        cur.execute("DROP TABLE IF EXISTS parse_errors")
+        cur.execute(
+            """
+            CREATE TABLE tickets (
+              id TEXT,
+              title TEXT,
+              status TEXT,
+              priority TEXT,
+              type TEXT,
+              effort TEXT,
+              owner TEXT,
+              created TEXT,
+              updated TEXT,
+              branch TEXT,
+              labels_json TEXT,
+              tags_json TEXT,
+              depends_on_json TEXT,
+              path TEXT PRIMARY KEY,
+              bucket TEXT,
+              is_archived INTEGER,
+              body TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE parse_errors (
+              path TEXT PRIMARY KEY,
+              error TEXT
+            )
+            """
+        )
+        cur.executemany(
+            """
+            INSERT INTO tickets (
+              id, title, status, priority, type, effort, owner, created, updated, branch,
+              labels_json, tags_json, depends_on_json, path, bucket, is_archived, body
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        cur.executemany("INSERT INTO parse_errors (path, error) VALUES (?, ?)", parse_errors)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets(priority)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_tickets_owner ON tickets(owner)")
+        conn.commit()
+
+        print(f"report db: {db_path}")
+        print(f"indexed tickets: {len(rows)}")
+        if parse_errors:
+            print(f"parse errors: {len(parse_errors)}")
+
+        if args.summary:
+            print("\nBy status:")
+            for status, count in cur.execute(
+                "SELECT COALESCE(status, '<none>'), COUNT(*) FROM tickets GROUP BY status ORDER BY COUNT(*) DESC"
+            ):
+                print(f"  {status:<12} {count}")
+
+            print("\nBy priority:")
+            for priority, count in cur.execute(
+                "SELECT COALESCE(priority, '<none>'), COUNT(*) FROM tickets GROUP BY priority ORDER BY COUNT(*) DESC"
+            ):
+                print(f"  {priority:<8} {count}")
+
+            print("\nCompleted by owner:")
+            for owner, count in cur.execute(
+                """
+                SELECT COALESCE(NULLIF(owner, ''), '<unowned>'), COUNT(*)
+                FROM tickets
+                WHERE status = 'done'
+                GROUP BY owner
+                ORDER BY COUNT(*) DESC
+                """
+            ):
+                print(f"  {owner:<20} {count}")
+
+        if args.search:
+            print(f"\nSearch results for: {args.search!r}")
+            q = f"%{args.search}%"
+            for tid, title, status, owner, path in cur.execute(
+                """
+                SELECT COALESCE(id, '<no-id>'), COALESCE(title, ''), COALESCE(status, ''),
+                       COALESCE(owner, ''), path
+                FROM tickets
+                WHERE id LIKE ? OR title LIKE ? OR body LIKE ? OR labels_json LIKE ? OR tags_json LIKE ?
+                ORDER BY updated DESC, id ASC
+                LIMIT ?
+                """,
+                (q, q, q, q, q, args.limit),
+            ):
+                print(f"  {tid}  {status:<12} {owner:<12} {title}  ({path})")
+    finally:
+        conn.close()
+    return 0
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mt", description="MuonTickets CLI (file-based agent tickets).")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -922,6 +1174,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_done.add_argument("--force", action="store_true")
     p_done.set_defaults(func=cmd_done)
 
+    p_archive = sub.add_parser("archive", help="Move a ticket from tickets/ to archive/ (expects done).")
+    p_archive.add_argument("id")
+    p_archive.add_argument("--force", action="store_true", help="Archive even if status is not done")
+    p_archive.set_defaults(func=cmd_archive)
+
     p_graph = sub.add_parser("graph", help="Show dependency graph.")
     p_graph.add_argument("--mermaid", action="store_true", help="Output Mermaid graph")
     p_graph.add_argument("--open-only", action="store_true", help="Hide done tickets")
@@ -938,6 +1195,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_val.add_argument("--max-claimed-per-owner", type=int, default=2)
     p_val.add_argument("--enforce-done-deps", action="store_true", help="Enforce that claimed/needs_review/done tickets have deps done")
     p_val.set_defaults(func=cmd_validate)
+
+    p_report = sub.add_parser("report", help="Build SQLite report DB from tickets/archive/backlogs and print summaries.")
+    p_report.add_argument("--db", default="tickets/tickets_report.sqlite3", help="SQLite output path (default: tickets/tickets_report.sqlite3)")
+    p_report.add_argument("--summary", action="store_true", default=True, help="Print summary tables")
+    p_report.add_argument("--search", default="", help="Search string for id/title/body/labels/tags")
+    p_report.add_argument("--limit", type=int, default=30, help="Max rows for search output")
+    p_report.set_defaults(func=cmd_report)
 
     return p
 

@@ -6,6 +6,11 @@ __pycache__/
 # macOS Finder metadata
 .DS_Store
 
+# MuonTickets generated report database
+tickets/tickets_report.sqlite3
+*.sqlite
+*.sqlite3
+
 # C extensions
 *.so
 

@@ -10,7 +10,7 @@ UV ?= uv
 MT_PATH ?= $(firstword $(wildcard tickets/mt/muontickets/mt.py) $(wildcard tickets/mt/muontickets/muontickets/mt.py) $(wildcard muontickets/mt.py))
 MT ?= $(UV) run python3 $(MT_PATH)
 
-.PHONY: tickets-validate tickets-list tickets-ready tickets-claimed tickets-show tickets-pick tickets-graph tickets-export tickets-stats
+.PHONY: tickets-validate tickets-list tickets-ready tickets-claimed tickets-show tickets-pick tickets-graph tickets-export tickets-stats tickets-report tickets-search
 
 tickets-validate:
 	@$(MT) validate
@@ -42,3 +42,11 @@ tickets-export:
 
 tickets-stats:
 	@$(MT) stats
+
+tickets-report:
+	@$(MT) report --summary
+
+# Usage: make tickets-search Q=auth
+tickets-search:
+	@if [ -z "$(Q)" ]; then echo "Usage: make tickets-search Q=keyword"; exit 2; fi
+	@$(MT) report --search "$(Q)"

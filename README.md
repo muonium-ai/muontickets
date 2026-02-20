@@ -52,3 +52,37 @@ After merge, mark the ticket complete:
 ```bash
 uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
 ```
+
+## Archive, Backlogs, and Ticket IDs
+
+- Active tickets live in `tickets/`.
+- Completed tickets can be moved to `archive/` using `mt archive`.
+- Future/planned work can live in `backlogs/`.
+- Ticket numbering is tracked in `tickets/last_ticket_id`.
+- If `tickets/last_ticket_id` is missing, `mt` automatically rebuilds the next number by scanning ticket IDs across `tickets/`, `archive/`, and `backlogs/`.
+
+Examples:
+
+```bash
+# Create ticket with sequence from tickets/last_ticket_id
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Implement feature X"
+
+# Archive a completed ticket
+uv run python3 tickets/mt/muontickets/muontickets/mt.py archive T-000001
+```
+
+## Reporting (SQLite)
+
+Generate a local SQLite report database (not committed):
+
+```bash
+uv run python3 tickets/mt/muontickets/muontickets/mt.py report --summary
+```
+
+Run with search:
+
+```bash
+uv run python3 tickets/mt/muontickets/muontickets/mt.py report --search auth --limit 20
+```
+
+By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data from `tickets/`, `archive/`, and `backlogs/`.
