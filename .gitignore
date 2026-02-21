@@ -14,10 +14,6 @@ tickets/tickets_report.sqlite3
 # Local ticket board data
 tickets/*
 !tickets/.gitkeep
-archive/*
-!archive/.gitkeep
-backlogs/*
-!backlogs/.gitkeep
 
 # C extensions
 *.so

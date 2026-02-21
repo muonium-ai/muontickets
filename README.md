@@ -63,10 +63,10 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
 ## Archive, Backlogs, and Ticket IDs
 
 - Active tickets live in `tickets/`.
-- Completed tickets can be moved to `archive/` using `mt archive`.
-- Future/planned work can live in `backlogs/`.
+- Completed tickets can be moved to `tickets/archive/` using `mt archive`.
+- Future/planned work can live in `tickets/backlogs/`.
 - Ticket numbering is tracked in `tickets/last_ticket_id`.
-- If `tickets/last_ticket_id` is missing, `mt` automatically rebuilds the next number by scanning ticket IDs across `tickets/`, `archive/`, and `backlogs/`.
+- If `tickets/last_ticket_id` is missing, `mt` automatically rebuilds the next number by scanning ticket IDs across `tickets/`, `tickets/archive/`, and `tickets/backlogs/`.
 
 Examples:
 
@@ -92,4 +92,4 @@ Run with search:
 uv run python3 tickets/mt/muontickets/muontickets/mt.py report --search auth --limit 20
 ```
 
-By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data from `tickets/`, `archive/`, and `backlogs/`.
+By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data from `tickets/`, `tickets/archive/`, and `tickets/backlogs/`.

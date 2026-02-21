@@ -160,10 +160,10 @@ def tickets_dir(repo_root: str) -> str:
     return os.path.join(repo_root, "tickets")
 
 def archive_dir(repo_root: str) -> str:
-    return os.path.join(repo_root, "archive")
+    return os.path.join(repo_root, "tickets", "archive")
 
 def backlogs_dir(repo_root: str) -> str:
-    return os.path.join(repo_root, "backlogs")
+    return os.path.join(repo_root, "tickets", "backlogs")
 
 def last_ticket_id_path(repo_root: str) -> str:
     return os.path.join(tickets_dir(repo_root), "last_ticket_id")
@@ -960,12 +960,12 @@ def cmd_pick(args: argparse.Namespace) -> int:
 
 def ticket_bucket(repo: str, path: str) -> str:
     rel = os.path.relpath(path, repo)
+    if rel.startswith("tickets/archive/"):
+        return "archive"
+    if rel.startswith("tickets/backlogs/"):
+        return "backlogs"
     if rel.startswith("tickets/"):
         return "tickets"
-    if rel.startswith("archive/"):
-        return "archive"
-    if rel.startswith("backlogs/"):
-        return "backlogs"
     return "other"
 
 def cmd_report(args: argparse.Namespace) -> int:
