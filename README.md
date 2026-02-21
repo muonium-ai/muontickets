@@ -23,6 +23,13 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py init
 uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 ```
 
+If you are in a direct MuonTickets checkout, you can also use the root entrypoint:
+
+```bash
+uv run python3 mt.py --help
+uv run python3 mt.py report --summary
+```
+
 ## For Agents: Ticket Workflow
 
 Run these from the project root where MuonTickets is installed.

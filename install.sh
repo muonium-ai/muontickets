@@ -46,7 +46,7 @@ in_git_repo() {
 }
 
 resolve_layout_paths() {
-  if [[ -f "${SUBMODULE_PATH}/mt.py" ]]; then
+  if [[ -f "${SUBMODULE_PATH}/mt.py" && -f "${SUBMODULE_PATH}/Makefile.snippet" && -f "${SUBMODULE_PATH}/hooks/pre-commit" ]]; then
     MT_REL_PATH="${SUBMODULE_PATH}/mt.py"
     HOOK_REL_PATH="${SUBMODULE_PATH}/hooks/pre-commit"
     SNIPPET_REL_PATH="${SUBMODULE_PATH}/Makefile.snippet"
