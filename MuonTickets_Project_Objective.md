@@ -100,7 +100,7 @@ No central manager required.
 
 # 4. Folder Structure
 
-After installation:
+After submodule installation:
 
     tickets/
       mt/
@@ -109,12 +109,17 @@ After installation:
           schema.json
           hooks/
           Makefile.snippet
-      T-000001.md
-      T-000002.md
+      ticket.template
+      T-000123.md
+      archive/
+      backlog/
 
-Tickets live in `tickets/`.
+Active tickets live in `tickets/`.
+Completed tickets can move to `tickets/archive/`.
+Future work can be staged in `tickets/backlog/`.
 
-MuonTickets logic lives in `tickets/mt/muontickets/` as a submodule.
+MuonTickets logic lives in `tickets/mt/muontickets/` as a submodule in consumer repositories,
+or in the repository root when developing MuonTickets core directly.
 
 This gives:
 
@@ -148,9 +153,17 @@ Agent loop:
 2.  `mt pick --owner agent-X`
 3.  Create branch from ticket branch name
 4.  Implement feature
-5.  `make check`
+5.  Run project checks/tests as applicable
 6.  `mt set-status T-xxxx needs_review`
 7.  After merge → `mt done T-xxxx`
+
+In submodule-based repos, command path is typically:
+
+  uv run python3 tickets/mt/muontickets/muontickets/mt.py <command>
+
+In a direct MuonTickets checkout:
+
+  uv run python3 mt.py <command>
 
 This enables:
 
@@ -185,7 +198,7 @@ This provides instant setup across projects.
 
 -   Schema compliance
 -   WIP limits
--   Dependency integrity
+-   Dependency integrity (including archived dependency references)
 -   Status transition rules
 -   Branch tracking requirements
 
