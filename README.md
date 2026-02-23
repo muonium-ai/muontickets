@@ -42,6 +42,8 @@ uv run python3 mt.py report --summary
 
 ## For Agents: Ticket Workflow
 
+Agent quick-reference guide: see [skills.md](skills.md) for install modes, command workflows, and best practices.
+
 Run these from the project root where MuonTickets is installed.
 
 ```bash
