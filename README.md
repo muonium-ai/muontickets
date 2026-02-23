@@ -64,6 +64,8 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
 
 - Active tickets live in `tickets/`.
 - Completed tickets can be moved to `tickets/archive/` using `mt archive`.
+- `mt archive` refuses to move a ticket if active tickets still reference it in `depends_on` (unless `--force`).
+- `mt validate` reports `depends_on archived ticket ...` when an active ticket depends on an archived ticket.
 - Future/planned work can live in `tickets/backlogs/`.
 - Ticket numbering is tracked in `tickets/last_ticket_id`.
 - If `tickets/last_ticket_id` is missing, `mt` automatically rebuilds the next number by scanning ticket IDs across `tickets/`, `tickets/archive/`, and `tickets/backlogs/`.

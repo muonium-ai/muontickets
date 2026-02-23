@@ -658,6 +658,27 @@ def cmd_archive(args: argparse.Namespace) -> int:
         eprint(f"Refusing to archive: status is {meta.get('status')!r} (expected 'done'). Use --force to override.")
         return 2
 
+    dependents: List[str] = []
+    for candidate in load_all_tickets(repo):
+        cmeta = candidate.meta
+        if "_parse_error" in cmeta:
+            continue
+        cmeta = normalize_meta(cmeta)
+        cid = cmeta.get("id")
+        if cid == args.id:
+            continue
+        deps = cmeta.get("depends_on") or []
+        if args.id in deps:
+            dependents.append(str(cid))
+
+    if dependents and not args.force:
+        dep_list = ", ".join(sorted(dependents))
+        eprint(
+            "Refusing to archive: active tickets depend on this ticket: "
+            f"{dep_list}. Update/remove depends_on or use --force."
+        )
+        return 2
+
     target_dir = archive_dir(repo)
     os.makedirs(target_dir, exist_ok=True)
     dst = os.path.join(target_dir, os.path.basename(t.path))
@@ -685,9 +706,10 @@ def validate_wip_limit(tickets: List[Ticket], max_claimed_per_owner: int) -> Lis
             errs.append(f"owner {owner!r} has {c} claimed tickets (max {max_claimed_per_owner})")
     return errs
 
-def validate_depends(tickets: List[Ticket]) -> List[str]:
+def validate_depends(tickets: List[Ticket], archived_ids: Optional[set[str]] = None) -> List[str]:
     existing = set()
     id_to_meta: Dict[str, Dict[str, Any]] = {}
+    archived = archived_ids or set()
     for t in tickets:
         if "_parse_error" in t.meta:
             continue
@@ -705,7 +727,10 @@ def validate_depends(tickets: List[Ticket]) -> List[str]:
         tid = meta.get("id")
         for dep in meta.get("depends_on") or []:
             if dep not in existing:
-                errs.append(f"{tid} depends_on missing ticket {dep}")
+                if dep in archived:
+                    errs.append(f"{tid} depends_on archived ticket {dep}")
+                else:
+                    errs.append(f"{tid} depends_on missing ticket {dep}")
     return errs
 
 def validate_claimable_deps(tickets: List[Ticket]) -> List[str]:
@@ -735,6 +760,16 @@ def validate_claimable_deps(tickets: List[Ticket]) -> List[str]:
 def cmd_validate(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     tickets = load_all_tickets(repo)
+    archived_ids = set()
+    for p in iter_ticket_files_recursive(archive_dir(repo)):
+        try:
+            archived_ticket = read_ticket(p)
+            archived_meta = normalize_meta(archived_ticket.meta)
+            archived_tid = archived_meta.get("id")
+            if isinstance(archived_tid, str):
+                archived_ids.add(archived_tid)
+        except Exception:
+            continue
     schema = load_schema()
 
     errors: List[str] = []
@@ -766,7 +801,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
             errors.append(f"{os.path.basename(t.path)}: effort must be one of {DEFAULT_EFFORTS}, got {eff!r}")
 
     errors += validate_wip_limit(tickets, args.max_claimed_per_owner)
-    errors += validate_depends(tickets)
+    errors += validate_depends(tickets, archived_ids)
     if args.enforce_done_deps:
         errors += validate_claimable_deps(tickets)
 
