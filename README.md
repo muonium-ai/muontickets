@@ -70,11 +70,22 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
 - Ticket numbering is tracked in `tickets/last_ticket_id`.
 - If `tickets/last_ticket_id` is missing, `mt` automatically rebuilds the next number by scanning ticket IDs across `tickets/`, `tickets/archive/`, and `tickets/backlogs/`.
 
+## Ticket Template (`tickets/ticket.template`)
+
+- On first install and on `mt init`, MuonTickets creates `tickets/ticket.template` if it does not already exist.
+- Users can edit this file to set default ticket metadata/body preferences.
+- `mt new "Title"` uses template defaults when available.
+- CLI args override template values when provided (for example: `--priority`, `--type`, `--effort`, `--label`, `--tag`, `--depends-on`, `--goal`).
+- Existing `tickets/ticket.template` files are never overwritten by installer/init.
+
 Examples:
 
 ```bash
 # Create ticket with sequence from tickets/last_ticket_id
 uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Implement feature X"
+
+# Override template defaults for one ticket
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Hotfix auth" --priority p0 --type code --effort xs --label urgent --goal "Fix login regression"
 
 # Archive a completed ticket
 uv run python3 tickets/mt/muontickets/muontickets/mt.py archive T-000001

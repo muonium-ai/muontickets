@@ -57,6 +57,7 @@ DEFAULT_STATES = ["ready", "claimed", "blocked", "needs_review", "done"]
 DEFAULT_PRIORITIES = ["p0", "p1", "p2"]
 DEFAULT_TYPES = ["spec", "code", "tests", "docs", "refactor", "chore"]
 DEFAULT_EFFORTS = ["xs", "s", "m", "l"]
+TICKET_TEMPLATE_NAME = "ticket.template"
 
 # Allowed transitions (strict by default)
 ALLOWED_TRANSITIONS = {
@@ -164,6 +165,9 @@ def archive_dir(repo_root: str) -> str:
 
 def backlogs_dir(repo_root: str) -> str:
     return os.path.join(repo_root, "tickets", "backlogs")
+
+def ticket_template_path(repo_root: str) -> str:
+    return os.path.join(tickets_dir(repo_root), TICKET_TEMPLATE_NAME)
 
 def last_ticket_id_path(repo_root: str) -> str:
     return os.path.join(tickets_dir(repo_root), "last_ticket_id")
@@ -346,6 +350,41 @@ def normalize_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
     meta.setdefault("tags", [])
     return meta
 
+def default_ticket_template_text() -> str:
+    return """---
+id: T-000000
+title: Template: replace title
+status: ready
+priority: p1
+type: code
+effort: s
+labels: []
+tags: []
+owner: null
+created: 1970-01-01
+updated: 1970-01-01
+depends_on: []
+branch: null
+---
+
+## Goal
+Write a single-sentence goal.
+
+## Acceptance Criteria
+- [ ] Define clear, testable checks (2–5 items)
+
+## Notes
+"""
+
+def ensure_ticket_template(repo_root: str) -> bool:
+    path = ticket_template_path(repo_root)
+    if os.path.exists(path):
+        return False
+    ensure_tickets_dir(tickets_dir(repo_root))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(default_ticket_template_text())
+    return True
+
 def validate_transition(old_status: str, new_status: str) -> Optional[str]:
     if old_status not in ALLOWED_TRANSITIONS:
         return f"unknown old status {old_status!r}"
@@ -433,6 +472,10 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"created {tdir}")
     else:
         print(f"tickets dir exists: {tdir}")
+
+    if ensure_ticket_template(repo):
+        print(f"created {ticket_template_path(repo)}")
+
     # Create an example ticket if none exist
     if not iter_ticket_files(tdir):
         tid = next_ticket_id_for_repo(repo)
@@ -480,24 +523,76 @@ def cmd_new(args: argparse.Namespace) -> int:
     tid = next_ticket_id_for_repo(repo)
     title = args.title.strip()
 
+    template_meta: Dict[str, Any] = {}
+    template_body = ""
+    tpath = ticket_template_path(repo)
+    if os.path.exists(tpath):
+        try:
+            tpl = read_ticket(tpath)
+        except Exception as ex:
+            eprint(f"Invalid ticket template at {tpath}: {ex}")
+            return 2
+        template_meta = normalize_meta(tpl.meta)
+        template_body = tpl.body
+
+    priority = args.priority if args.priority is not None else str(template_meta.get("priority", "p1"))
+    ticket_type = args.type if args.type is not None else str(template_meta.get("type", "code"))
+    effort = args.effort if args.effort is not None else str(template_meta.get("effort", "s"))
+
+    if priority not in DEFAULT_PRIORITIES:
+        eprint(f"Invalid priority {priority!r} from CLI/template. Allowed: {DEFAULT_PRIORITIES}")
+        return 2
+    if ticket_type not in DEFAULT_TYPES:
+        eprint(f"Invalid type {ticket_type!r} from CLI/template. Allowed: {DEFAULT_TYPES}")
+        return 2
+    if effort not in DEFAULT_EFFORTS:
+        eprint(f"Invalid effort {effort!r} from CLI/template. Allowed: {DEFAULT_EFFORTS}")
+        return 2
+
+    labels = args.label if args.label else list(template_meta.get("labels") or [])
+    tags = args.tag if args.tag else list(template_meta.get("tags") or [])
+    depends_on = args.depends_on if args.depends_on else list(template_meta.get("depends_on") or [])
+
+    status = str(template_meta.get("status", "ready"))
+    if status not in DEFAULT_STATES:
+        status = "ready"
+    owner = template_meta.get("owner")
+    if not isinstance(owner, str):
+        owner = None
+    branch = template_meta.get("branch")
+    if not isinstance(branch, str):
+        branch = None
+
     meta = normalize_meta({
         "id": tid,
         "title": title,
-        "status": "ready",
-        "priority": args.priority,
-        "type": args.type,
-        "effort": args.effort,
-        "labels": args.label or [],
-        "tags": args.tag or [],
-        "owner": None,
+        "status": status,
+        "priority": priority,
+        "type": ticket_type,
+        "effort": effort,
+        "labels": labels,
+        "tags": tags,
+        "owner": owner,
         "created": today_str(),
         "updated": today_str(),
-        "depends_on": args.depends_on or [],
-        "branch": None,
+        "depends_on": depends_on,
+        "branch": branch,
     })
 
-    body = f"""## Goal
-{args.goal or "Write a single-sentence goal."}
+    if args.goal:
+        body = f"""## Goal
+{args.goal}
+
+## Acceptance Criteria
+- [ ] Define clear, testable checks (2–5 items)
+
+## Notes
+"""
+    elif template_body.strip():
+        body = template_body
+    else:
+        body = """## Goal
+Write a single-sentence goal.
 
 ## Acceptance Criteria
 - [ ] Define clear, testable checks (2–5 items)
@@ -1150,9 +1245,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_new = sub.add_parser("new", help="Create a new ticket.")
     p_new.add_argument("title", help="Ticket title")
-    p_new.add_argument("--priority", default="p1", choices=DEFAULT_PRIORITIES)
-    p_new.add_argument("--type", default="code", choices=DEFAULT_TYPES)
-    p_new.add_argument("--effort", default="s", choices=DEFAULT_EFFORTS)
+    p_new.add_argument("--priority", default=None, choices=DEFAULT_PRIORITIES)
+    p_new.add_argument("--type", default=None, choices=DEFAULT_TYPES)
+    p_new.add_argument("--effort", default=None, choices=DEFAULT_EFFORTS)
     p_new.add_argument("--label", action="append", default=[], help="Label (repeatable)")
     p_new.add_argument("--tag", action="append", default=[], help="Tag (repeatable, optional)")
     p_new.add_argument("--depends-on", action="append", default=[], dest="depends_on", help="Dependency ticket id (repeatable)")

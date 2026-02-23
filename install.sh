@@ -133,6 +133,55 @@ Make targets (if Makefile patched):
 EOF
 }
 
+install_ticket_template() {
+  local template_dst="tickets/ticket.template"
+  local template_src=""
+
+  if [[ -f "${SUBMODULE_PATH}/muontickets/ticket.template" ]]; then
+    template_src="${SUBMODULE_PATH}/muontickets/ticket.template"
+  elif [[ -f "${SUBMODULE_PATH}/ticket.template" ]]; then
+    template_src="${SUBMODULE_PATH}/ticket.template"
+  fi
+
+  if [[ -f "$template_dst" ]]; then
+    say "Template already exists at $template_dst (leaving as-is)."
+    return 0
+  fi
+
+  if [[ -n "$template_src" ]]; then
+    cp "$template_src" "$template_dst"
+    say "Installed default ticket template at $template_dst"
+    return 0
+  fi
+
+  cat > "$template_dst" <<'EOF'
+---
+id: T-000000
+title: Template: replace title
+status: ready
+priority: p1
+type: code
+effort: s
+labels: []
+tags: []
+owner: null
+created: 1970-01-01
+updated: 1970-01-01
+depends_on: []
+branch: null
+---
+
+## Goal
+Write a single-sentence goal.
+
+## Acceptance Criteria
+- [ ] Define clear, testable checks (2–5 items)
+
+## Notes
+EOF
+  say "Installed fallback ticket template at $template_dst"
+}
+
 # ---------- arg parsing ----------
 NO_HOOKS=0
 NO_MAKEFILE=0
@@ -214,5 +263,7 @@ if [[ "$NO_HOOKS" -eq 0 && "${INSTALL_HOOKS}" != "0" ]]; then
 else
   warn "Skipping pre-commit hook install."
 fi
+
+install_ticket_template
 
 print_next_steps

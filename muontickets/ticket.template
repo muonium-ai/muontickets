@@ -1,0 +1,23 @@
+---
+id: T-000000
+title: Template: replace title
+status: ready
+priority: p1
+type: code
+effort: s
+labels: []
+tags: []
+owner: null
+created: 1970-01-01
+updated: 1970-01-01
+depends_on: []
+branch: null
+---
+
+## Goal
+Write a single-sentence goal.
+
+## Acceptance Criteria
+- [ ] Define clear, testable checks (2–5 items)
+
+## Notes
