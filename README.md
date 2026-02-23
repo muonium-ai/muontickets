@@ -118,3 +118,10 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py report --search auth --l
 ```
 
 By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data from `tickets/`, `tickets/archive/`, and `tickets/backlogs/`.
+
+## Changelog Process
+
+- User-visible changes must include an entry in `CHANGELOG.md`.
+- Use this format per entry: `YYYY-MM-DD | Type | Summary | Ticket: T-000123`.
+- Ticket reference is required for traceability from feature/fix to planning artifact.
+- Add changelog updates in the same PR/commit as the code/docs change.
