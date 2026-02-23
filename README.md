@@ -3,19 +3,29 @@ file based ticketing system for agents, resides under the tickets folder
 
 ## Install
 
-Use this repository directly:
+Recommended for product/application repos: install MuonTickets as a git submodule.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/muonium-ai/muontickets/main/install.sh | bash
+```
+
+If you need a custom source repo for the submodule:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/muonium-ai/muontickets/main/install.sh | bash -s -- --repo https://github.com/muonium-ai/muontickets.git
 ```
 
-Template form:
+Template form for your own fork:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/install.sh | bash -s -- --repo https://github.com/<org>/<repo>.git
 ```
 
+Use direct checkout (this repository itself) only when developing MuonTickets core.
+
 ## Quickstart (uv)
+
+For repos where MuonTickets is installed as submodule:
 
 ```bash
 uv sync
@@ -23,7 +33,7 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py init
 uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 ```
 
-If you are in a direct MuonTickets checkout, you can also use the root entrypoint:
+If you are in a direct MuonTickets checkout, use the root entrypoint:
 
 ```bash
 uv run python3 mt.py --help

@@ -2,6 +2,17 @@
 
 Use MuonTickets to coordinate work through ticket files in `tickets/`.
 
+### Install mode (default)
+
+- Default assumption: MuonTickets is installed as a submodule at `tickets/mt/muontickets`.
+- Use direct-checkout commands (`python3 mt.py ...`) only when you are working inside the MuonTickets core repository itself.
+
+Submodule install command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/muonium-ai/muontickets/main/install.sh | bash
+```
+
 ### Ticket states
 
 - `ready` → not started
@@ -23,6 +34,9 @@ Use MuonTickets to coordinate work through ticket files in `tickets/`.
 ### Commands (uv)
 
 ```bash
+# Ensure board exists in submodule-based repos
+uv run python3 tickets/mt/muontickets/muontickets/mt.py init
+
 # Pick best available ticket for this agent
 uv run python3 tickets/mt/muontickets/muontickets/mt.py pick --owner agent-1
 
@@ -40,6 +54,13 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 
 # After merge, mark complete
 uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
+```
+
+Direct-checkout equivalent (MuonTickets core repo only):
+
+```bash
+uv run python3 mt.py pick --owner agent-1
+uv run python3 mt.py validate
 ```
 
 ### Rules for agents
