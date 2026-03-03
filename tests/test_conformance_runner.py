@@ -15,6 +15,28 @@ FIXTURES = ROOT / "tests" / "conformance" / "fixtures"
 
 
 class ConformanceRunnerTests(unittest.TestCase):
+    def get_rust_bin(self) -> str:
+        rust_bin = os.environ.get("RUST_MT_BIN", "").strip()
+        if rust_bin:
+            return rust_bin
+
+        default_bin = ROOT / "ports" / "rust-mt" / "target" / "debug" / "mt-port"
+        if default_bin.exists():
+            return str(default_bin)
+
+        if shutil.which("cargo"):
+            build = subprocess.run(
+                ["cargo", "build"],
+                cwd=str(ROOT / "ports" / "rust-mt"),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(build.returncode, 0, msg=f"stdout:\n{build.stdout}\nstderr:\n{build.stderr}")
+            if default_bin.exists():
+                return str(default_bin)
+
+        self.skipTest("rust binary not available; set RUST_MT_BIN or install cargo")
+
     def get_zig_bin(self) -> str:
         zig_bin = os.environ.get("ZIG_MT_BIN", "").strip()
         if zig_bin:
@@ -107,6 +129,70 @@ class ConformanceRunnerTests(unittest.TestCase):
         fixture = FIXTURES / "pick_scoring.json"
         env = dict(**__import__("os").environ)
         env["MT_CMD"] = zig_bin
+        proc = subprocess.run(
+            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
+            cwd=str(ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_rust_core_workflow_fixture(self) -> None:
+        rust_bin = self.get_rust_bin()
+
+        fixture = FIXTURES / "core_workflow.json"
+        env = dict(**__import__("os").environ)
+        env["MT_CMD"] = rust_bin
+        proc = subprocess.run(
+            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
+            cwd=str(ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_rust_reporting_graph_pick_fixture(self) -> None:
+        rust_bin = self.get_rust_bin()
+
+        fixture = FIXTURES / "reporting_graph_pick.json"
+        env = dict(**__import__("os").environ)
+        env["MT_CMD"] = rust_bin
+        proc = subprocess.run(
+            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
+            cwd=str(ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_rust_options_parity_fixture(self) -> None:
+        rust_bin = self.get_rust_bin()
+
+        fixture = FIXTURES / "options_parity.json"
+        env = dict(**__import__("os").environ)
+        env["MT_CMD"] = rust_bin
+        proc = subprocess.run(
+            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
+            cwd=str(ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_rust_pick_scoring_fixture(self) -> None:
+        rust_bin = self.get_rust_bin()
+
+        fixture = FIXTURES / "pick_scoring.json"
+        env = dict(**__import__("os").environ)
+        env["MT_CMD"] = rust_bin
         proc = subprocess.run(
             [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
             cwd=str(ROOT),

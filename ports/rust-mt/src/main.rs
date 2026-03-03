@@ -1671,7 +1671,7 @@ fn cmd_report(db: String, summary: bool, search: String, limit: i32) -> Result<i
     }
 
     if !search.is_empty() {
-        println!("\nSearch results for: {:?}", search);
+        println!("\nSearch results for: '{}'", search);
         let q = format!("%{}%", search);
         let mut stmt = conn.prepare(
             "SELECT COALESCE(id, '<no-id>'), COALESCE(title, ''), COALESCE(status, ''),
