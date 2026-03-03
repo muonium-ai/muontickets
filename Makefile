@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 PY := .venv/bin/python
 
-.PHONY: test test-conformance benchmark-smoke benchmark-1000 compare-generated
+.PHONY: test test-conformance benchmark-smoke benchmark-1000 compare-generated swarm-smoke swarm-test
 
 test: test-conformance
 
@@ -28,3 +28,9 @@ benchmark-1000:
 
 compare-generated:
 	$(PY) tools/perf_1000/compare_generated_tickets.py
+
+swarm-smoke:
+	$(PY) tools/swarm_parallel/swarm_parallel_test.py --threads 8 --duration 10 --seed-tickets 20
+
+swarm-test:
+	$(PY) tools/swarm_parallel/swarm_parallel_test.py --threads 24 --duration 45 --seed-tickets 80
