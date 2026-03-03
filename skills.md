@@ -103,8 +103,14 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py archive T-000123
 
 - CLI-first workflow: do not directly edit ticket files for normal operations; use `mt.py` (`claim`, `set-status`, `comment`, `done`, `archive`) so validation and transition rules are enforced.
 - PR/commit isolation: keep each ticket fix in a separate git commit and a separate pull request whenever possible.
+- Worktree isolation: when available, run parallel agents in separate git worktrees to prevent branch/index/temp-file collisions.
+- Branch discipline: use branch-per-agent and avoid direct development on `main`/`master`.
+- Integration discipline: prefer pull-request-based merges instead of direct commits to protected/default branches.
 - Parallelization rule: if tickets are independent and can be completed by isolated agents without impacting shared system behavior, assign multiple agents to run in parallel.
+- Temp artifact hygiene: use project-local `tmp/<agent-name>/` for scratch/build artifacts (avoid global `/tmp` assumptions in sandboxed environments).
 - Dependency handling: respect `depends_on`; do not start dependent work until prerequisites are done unless explicitly instructed.
+- Build hygiene: prefer Makefile targets where possible; use `make clean` as the standard cleanup step for project temp state.
+- Test order: run a basic smoke test first, then broader suites, to surface breakage early and reduce CI churn.
 - Validation cadence: run `mt validate` before commit/push and after ticket metadata updates.
 - Ownership hygiene: always set clear owner and branch when claiming; avoid multiple active claims unless team policy allows it.
 - Status discipline: use the normal flow (`ready -> claimed -> needs_review -> done`) and avoid force transitions unless a human asks.

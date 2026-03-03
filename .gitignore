@@ -15,6 +15,10 @@ tickets/tickets_report.sqlite3
 tickets/*
 !tickets/.gitkeep
 
+# Project-local temporary workspace
+tmp/*
+!tmp/.gitkeep
+
 # C extensions
 *.so
 

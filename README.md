@@ -64,6 +64,17 @@ Execution guidance:
 
 - Prefer one ticket fix per git commit and one pull request per ticket to keep reviews, rollback, and traceability clean.
 - When tickets are isolated (no shared files, no dependency coupling, no system-wide side effects), run multiple agents in parallel. Parallel independent execution is a core MuonTickets use case.
+- Prefer git worktrees for parallel agent isolation where available (one worktree per agent) to avoid clobbering local state.
+- Use a branch-per-agent workflow and avoid direct development on `main`/`master`.
+- Integrate via pull requests instead of direct commits to protected/default branches.
+
+### Sandbox-safe multi-agent workspace
+
+- Keep transient artifacts under project-local `tmp/` (not `/tmp`) to reduce sandbox/path permission issues.
+- Use per-agent subfolders such as `tmp/agent-a/`, `tmp/agent-b/` for generated scratch files.
+- `tmp/` is ignored in git except `tmp/.gitkeep`, so the convention is available without polluting commits.
+- Prefer Makefile targets for build/test workflows where available, and include `make clean` as standard cleanup for project temp state.
+- Run a basic smoke test first (before full test suites) to catch breakage early and shorten feedback loops.
 
 Run these from the project root where MuonTickets is installed.
 
