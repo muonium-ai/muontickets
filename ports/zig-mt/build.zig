@@ -14,6 +14,8 @@ pub fn build(b: *std.Build) void {
         .name = "mt-zig",
         .root_module = module,
     });
+    exe.linkLibC();
+    exe.linkSystemLibrary("sqlite3");
 
     b.installArtifact(exe);
 

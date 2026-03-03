@@ -8,6 +8,7 @@ This folder contains the Zig implementation track for the MuonTickets non-Python
 - Command surface mapped to current `mt.py` commands.
 - Implemented commands: `init`, `new`, `ls`, `show`, `pick`, `claim`, `comment`, `set-status`, `done`, `archive`, `graph`, `export`, `stats`, `validate`, `report`.
 - `new`/`ls`/`pick`/`claim` now support a broader parity option set (`--depends-on`, `--label`, filters, branch override, dependency/WIP controls).
+- `report` now writes a real SQLite database with `tickets` and `parse_errors` tables plus summary/search SQL queries.
 
 ## Build and run
 
@@ -25,6 +26,5 @@ MT_CMD="$(pwd)/zig-out/bin/mt-zig" ../../.venv/bin/python ../../tests/conformanc
 
 ## Next slices
 
-1. Improve `report` from stubbed artifact to SQLite-compatible schema parity.
-2. Expand template/default behavior parity for `new` (including template ingestion).
-3. Add cross-compilation artifacts for macOS/Linux/Windows.
+1. Expand template/default behavior parity for `new` (including template ingestion).
+2. Add cross-compilation artifacts for macOS/Linux/Windows.

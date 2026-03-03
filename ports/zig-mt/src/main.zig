@@ -1,4 +1,7 @@
 const std = @import("std");
+const c = @cImport({
+    @cInclude("sqlite3.h");
+});
 
 const Command = enum {
     init,
@@ -208,6 +211,9 @@ fn scanMaxTicketNumber(allocator: std.mem.Allocator, repo: []const u8) !u32 {
 
         while (try walker.next()) |entry| {
             if (entry.kind != .file) continue;
+            if (std.mem.eql(u8, root_rel, "tickets") and std.mem.indexOfScalar(u8, entry.path, std.fs.path.sep) != null) {
+                continue;
+            }
             const base = std.fs.path.basename(entry.path);
             if (!isTicketFilename(base)) continue;
             const n = try parseTicketNumber(base[0..8]);
@@ -636,9 +642,9 @@ fn defaultBranch(allocator: std.mem.Allocator, id: []const u8, title: []const u8
     var buf = try std.ArrayList(u8).initCapacity(allocator, 64);
     defer buf.deinit(allocator);
     for (title) |ch| {
-        const c = std.ascii.toLower(ch);
-        if ((c >= 'a' and c <= 'z') or (c >= '0' and c <= '9')) {
-            try buf.append(allocator, c);
+        const lower_ch = std.ascii.toLower(ch);
+        if ((lower_ch >= 'a' and lower_ch <= 'z') or (lower_ch >= '0' and lower_ch <= '9')) {
+            try buf.append(allocator, lower_ch);
         } else {
             if (buf.items.len == 0 or buf.items[buf.items.len - 1] != '-') {
                 try buf.append(allocator, '-');
@@ -1235,12 +1241,50 @@ const ReportRow = struct {
     id: []u8,
     title: []u8,
     status: []u8,
+    priority: []u8,
+    ticket_type: []u8,
+    effort: []u8,
     owner: []u8,
+    created: []u8,
+    updated: []u8,
+    branch: []u8,
+    depends_on: []u8,
     labels: []u8,
     tags: []u8,
+    bucket: []u8,
+    is_archived: i32,
     path: []u8,
     body: []u8,
 };
+
+fn sqliteOk(rc: c_int) bool {
+    return rc == c.SQLITE_OK or rc == c.SQLITE_DONE or rc == c.SQLITE_ROW;
+}
+
+fn sqliteCheck(db: *c.sqlite3, rc: c_int, context: []const u8) !void {
+    if (sqliteOk(rc)) return;
+    const msg_ptr = c.sqlite3_errmsg(db);
+    const msg = if (msg_ptr != null) std.mem.span(msg_ptr) else "unknown sqlite error";
+    std.debug.print("sqlite error ({s}): {s}\n", .{ context, msg });
+    return error.SqliteError;
+}
+
+fn sqliteExec(db: *c.sqlite3, sql: []const u8) !void {
+    const sql_z = try std.heap.c_allocator.dupeZ(u8, sql);
+    defer std.heap.c_allocator.free(sql_z);
+    const rc = c.sqlite3_exec(db, sql_z.ptr, null, null, null);
+    if (rc != c.SQLITE_OK) {
+        const msg_ptr = c.sqlite3_errmsg(db);
+        const msg = if (msg_ptr != null) std.mem.span(msg_ptr) else "sqlite exec failed";
+        std.debug.print("sqlite exec error: {s}\n", .{msg});
+        return error.SqliteError;
+    }
+}
+
+fn sqliteBindText(stmt: *c.sqlite3_stmt, idx: c_int, text: []const u8) !void {
+    const rc = c.sqlite3_bind_text(stmt, idx, text.ptr, @intCast(text.len), c.SQLITE_STATIC);
+    if (rc != c.SQLITE_OK) return error.SqliteError;
+}
 
 fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     const repo = try findRepoRoot(allocator);
@@ -1249,6 +1293,7 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     var db_rel: []const u8 = "tickets/tickets_report.sqlite3";
     var search: []const u8 = "";
     var limit: usize = 30;
+    var summary = true;
 
     var i: usize = 0;
     while (i < cmd_args.len) : (i += 1) {
@@ -1283,6 +1328,14 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             i += 1;
             continue;
         }
+        if (std.mem.eql(u8, a, "--summary")) {
+            summary = true;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--no-summary")) {
+            summary = false;
+            continue;
+        }
     }
 
     const db_path = if (std.fs.path.isAbsolute(db_rel))
@@ -1296,18 +1349,31 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     }
 
     var rows = try std.ArrayList(ReportRow).initCapacity(allocator, 64);
+    var seen_paths = std.StringHashMap(void).init(allocator);
     defer {
         for (rows.items) |row| {
             allocator.free(row.id);
             allocator.free(row.title);
             allocator.free(row.status);
+            allocator.free(row.priority);
+            allocator.free(row.ticket_type);
+            allocator.free(row.effort);
             allocator.free(row.owner);
+            allocator.free(row.created);
+            allocator.free(row.updated);
+            allocator.free(row.branch);
+            allocator.free(row.depends_on);
             allocator.free(row.labels);
             allocator.free(row.tags);
+            allocator.free(row.bucket);
             allocator.free(row.path);
             allocator.free(row.body);
         }
         rows.deinit(allocator);
+
+        var key_it = seen_paths.keyIterator();
+        while (key_it.next()) |k| allocator.free(k.*);
+        seen_paths.deinit();
     }
 
     const roots = [_][]const u8{ "tickets", "tickets/archive", "tickets/backlogs" };
@@ -1332,40 +1398,204 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
 
             const rel = try std.fs.path.join(allocator, &[_][]const u8{ root_rel, entry.path });
             defer allocator.free(rel);
+            if (seen_paths.contains(rel)) continue;
+            try seen_paths.put(try allocator.dupe(u8, rel), {});
 
             try rows.append(allocator, .{
                 .id = try allocator.dupe(u8, parseMetaField(content, "id") orelse base[0..8]),
                 .title = try allocator.dupe(u8, parseMetaField(content, "title") orelse ""),
                 .status = try allocator.dupe(u8, parseMetaField(content, "status") orelse ""),
+                .priority = try allocator.dupe(u8, parseMetaField(content, "priority") orelse ""),
+                .ticket_type = try allocator.dupe(u8, parseMetaField(content, "type") orelse ""),
+                .effort = try allocator.dupe(u8, parseMetaField(content, "effort") orelse ""),
                 .owner = try allocator.dupe(u8, parseMetaField(content, "owner") orelse ""),
+                .created = try allocator.dupe(u8, parseMetaField(content, "created") orelse ""),
+                .updated = try allocator.dupe(u8, parseMetaField(content, "updated") orelse ""),
+                .branch = try allocator.dupe(u8, parseMetaField(content, "branch") orelse ""),
+                .depends_on = try allocator.dupe(u8, parseMetaField(content, "depends_on") orelse "[]"),
                 .labels = try allocator.dupe(u8, parseMetaField(content, "labels") orelse "[]"),
                 .tags = try allocator.dupe(u8, parseMetaField(content, "tags") orelse "[]"),
+                .bucket = try allocator.dupe(u8, if (std.mem.eql(u8, root_rel, "tickets/archive")) "archive" else if (std.mem.eql(u8, root_rel, "tickets/backlogs")) "backlogs" else "tickets"),
+                .is_archived = if (std.mem.eql(u8, root_rel, "tickets/archive")) 1 else 0,
                 .path = try allocator.dupe(u8, rel),
                 .body = try allocator.dupe(u8, content),
             });
         }
     }
 
-    const db_stub = try std.fmt.allocPrint(allocator, "MuonTickets report stub\nrows={d}\n", .{rows.items.len});
-    defer allocator.free(db_stub);
-    try std.fs.cwd().writeFile(.{ .sub_path = db_path, .data = db_stub });
+    var db_ptr: ?*c.sqlite3 = null;
+    const db_path_z = try allocator.dupeZ(u8, db_path);
+    defer allocator.free(db_path_z);
+    const open_rc = c.sqlite3_open(db_path_z.ptr, &db_ptr);
+    if (open_rc != c.SQLITE_OK or db_ptr == null) {
+        if (db_ptr) |db| {
+            defer _ = c.sqlite3_close(db);
+            const msg_ptr = c.sqlite3_errmsg(db);
+            const msg = if (msg_ptr != null) std.mem.span(msg_ptr) else "unknown sqlite open error";
+            std.debug.print("sqlite open error: {s}\n", .{msg});
+        } else {
+            std.debug.print("sqlite open error\n", .{});
+        }
+        return error.SqliteError;
+    }
+    const db = db_ptr.?;
+    defer _ = c.sqlite3_close(db);
+
+    const schema_sql =
+        \\DROP TABLE IF EXISTS tickets;
+        \\DROP TABLE IF EXISTS parse_errors;
+        \\CREATE TABLE tickets (
+        \\  id TEXT,
+        \\  title TEXT,
+        \\  status TEXT,
+        \\  priority TEXT,
+        \\  type TEXT,
+        \\  effort TEXT,
+        \\  owner TEXT,
+        \\  created TEXT,
+        \\  updated TEXT,
+        \\  branch TEXT,
+        \\  labels_json TEXT,
+        \\  tags_json TEXT,
+        \\  depends_on_json TEXT,
+        \\  path TEXT PRIMARY KEY,
+        \\  bucket TEXT,
+        \\  is_archived INTEGER,
+        \\  body TEXT
+        \\);
+        \\CREATE TABLE parse_errors (
+        \\  path TEXT PRIMARY KEY,
+        \\  error TEXT
+        \\);
+        \\CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+        \\CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets(priority);
+        \\CREATE INDEX IF NOT EXISTS idx_tickets_owner ON tickets(owner);
+    ;
+    try sqliteExec(db, schema_sql);
+
+    const insert_sql = "INSERT INTO tickets (id, title, status, priority, type, effort, owner, created, updated, branch, labels_json, tags_json, depends_on_json, path, bucket, is_archived, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+    const insert_sql_z = try allocator.dupeZ(u8, insert_sql);
+    defer allocator.free(insert_sql_z);
+    var stmt: ?*c.sqlite3_stmt = null;
+    try sqliteCheck(db, c.sqlite3_prepare_v2(db, insert_sql_z.ptr, -1, &stmt, null), "prepare insert");
+    defer _ = c.sqlite3_finalize(stmt);
+
+    for (rows.items) |row| {
+        try sqliteCheck(db, c.sqlite3_reset(stmt), "reset insert");
+        try sqliteCheck(db, c.sqlite3_clear_bindings(stmt), "clear bindings");
+        try sqliteBindText(stmt.?, 1, row.id);
+        try sqliteBindText(stmt.?, 2, row.title);
+        try sqliteBindText(stmt.?, 3, row.status);
+        try sqliteBindText(stmt.?, 4, row.priority);
+        try sqliteBindText(stmt.?, 5, row.ticket_type);
+        try sqliteBindText(stmt.?, 6, row.effort);
+        try sqliteBindText(stmt.?, 7, row.owner);
+        try sqliteBindText(stmt.?, 8, row.created);
+        try sqliteBindText(stmt.?, 9, row.updated);
+        try sqliteBindText(stmt.?, 10, row.branch);
+        try sqliteBindText(stmt.?, 11, row.labels);
+        try sqliteBindText(stmt.?, 12, row.tags);
+        try sqliteBindText(stmt.?, 13, row.depends_on);
+        try sqliteBindText(stmt.?, 14, row.path);
+        try sqliteBindText(stmt.?, 15, row.bucket);
+        _ = c.sqlite3_bind_int(stmt.?, 16, row.is_archived);
+        try sqliteBindText(stmt.?, 17, row.body);
+        try sqliteCheck(db, c.sqlite3_step(stmt), "insert row");
+    }
 
     std.debug.print("report db: {s}\n", .{db_path});
     std.debug.print("indexed tickets: {d}\n", .{rows.items.len});
 
+    if (summary) {
+        std.debug.print("\nBy status:\n", .{});
+        const by_status_sql = "SELECT COALESCE(status, '<none>'), COUNT(*) FROM tickets GROUP BY status ORDER BY COUNT(*) DESC;";
+        const by_status_sql_z = try allocator.dupeZ(u8, by_status_sql);
+        defer allocator.free(by_status_sql_z);
+        var status_stmt: ?*c.sqlite3_stmt = null;
+        try sqliteCheck(db, c.sqlite3_prepare_v2(db, by_status_sql_z.ptr, -1, &status_stmt, null), "prepare by status");
+        defer _ = c.sqlite3_finalize(status_stmt);
+        while (true) {
+            const rc = c.sqlite3_step(status_stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return error.SqliteError;
+            const status_ptr = c.sqlite3_column_text(status_stmt, 0);
+            const count = c.sqlite3_column_int(status_stmt, 1);
+            const status_text: []const u8 = if (status_ptr != null) std.mem.span(status_ptr) else "<none>";
+            std.debug.print("  {s:<12} {d}\n", .{ status_text, count });
+        }
+
+        std.debug.print("\nBy priority:\n", .{});
+        const by_priority_sql = "SELECT COALESCE(priority, '<none>'), COUNT(*) FROM tickets GROUP BY priority ORDER BY COUNT(*) DESC;";
+        const by_priority_sql_z = try allocator.dupeZ(u8, by_priority_sql);
+        defer allocator.free(by_priority_sql_z);
+        var priority_stmt: ?*c.sqlite3_stmt = null;
+        try sqliteCheck(db, c.sqlite3_prepare_v2(db, by_priority_sql_z.ptr, -1, &priority_stmt, null), "prepare by priority");
+        defer _ = c.sqlite3_finalize(priority_stmt);
+        while (true) {
+            const rc = c.sqlite3_step(priority_stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return error.SqliteError;
+            const priority_ptr = c.sqlite3_column_text(priority_stmt, 0);
+            const count = c.sqlite3_column_int(priority_stmt, 1);
+            const priority_text: []const u8 = if (priority_ptr != null) std.mem.span(priority_ptr) else "<none>";
+            std.debug.print("  {s:<8} {d}\n", .{ priority_text, count });
+        }
+
+        std.debug.print("\nCompleted by owner:\n", .{});
+        const by_owner_sql =
+            "SELECT COALESCE(NULLIF(owner, ''), '<unowned>'), COUNT(*) " ++
+            "FROM tickets WHERE status = 'done' GROUP BY owner ORDER BY COUNT(*) DESC;";
+        const by_owner_sql_z = try allocator.dupeZ(u8, by_owner_sql);
+        defer allocator.free(by_owner_sql_z);
+        var owner_stmt: ?*c.sqlite3_stmt = null;
+        try sqliteCheck(db, c.sqlite3_prepare_v2(db, by_owner_sql_z.ptr, -1, &owner_stmt, null), "prepare by owner");
+        defer _ = c.sqlite3_finalize(owner_stmt);
+        while (true) {
+            const rc = c.sqlite3_step(owner_stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return error.SqliteError;
+            const owner_ptr = c.sqlite3_column_text(owner_stmt, 0);
+            const count = c.sqlite3_column_int(owner_stmt, 1);
+            const owner_text: []const u8 = if (owner_ptr != null) std.mem.span(owner_ptr) else "<unowned>";
+            std.debug.print("  {s:<20} {d}\n", .{ owner_text, count });
+        }
+    }
+
     if (search.len > 0) {
         std.debug.print("\nSearch results for: '{s}'\n", .{search});
-        var emitted: usize = 0;
-        for (rows.items) |row| {
-            if (emitted >= limit) break;
-            const hit = std.mem.indexOf(u8, row.id, search) != null or
-                std.mem.indexOf(u8, row.title, search) != null or
-                std.mem.indexOf(u8, row.body, search) != null or
-                std.mem.indexOf(u8, row.labels, search) != null or
-                std.mem.indexOf(u8, row.tags, search) != null;
-            if (!hit) continue;
-            std.debug.print("  {s}  {s} {s}  {s}  ({s})\n", .{ row.id, row.status, row.owner, row.title, row.path });
-            emitted += 1;
+        const search_sql =
+            "SELECT COALESCE(id, '<no-id>'), COALESCE(title, ''), COALESCE(status, ''), " ++
+            "COALESCE(owner, ''), path FROM tickets " ++
+            "WHERE id LIKE ?1 OR title LIKE ?1 OR body LIKE ?1 OR labels_json LIKE ?1 OR tags_json LIKE ?1 " ++
+            "ORDER BY updated DESC, id ASC LIMIT ?2;";
+        const search_sql_z = try allocator.dupeZ(u8, search_sql);
+        defer allocator.free(search_sql_z);
+        var search_stmt: ?*c.sqlite3_stmt = null;
+        try sqliteCheck(db, c.sqlite3_prepare_v2(db, search_sql_z.ptr, -1, &search_stmt, null), "prepare search");
+        defer _ = c.sqlite3_finalize(search_stmt);
+
+        const q = try std.fmt.allocPrint(allocator, "%{s}%", .{search});
+        defer allocator.free(q);
+        try sqliteBindText(search_stmt.?, 1, q);
+        _ = c.sqlite3_bind_int(search_stmt.?, 2, @intCast(limit));
+
+        while (true) {
+            const rc = c.sqlite3_step(search_stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return error.SqliteError;
+            const id_ptr = c.sqlite3_column_text(search_stmt, 0);
+            const title_ptr = c.sqlite3_column_text(search_stmt, 1);
+            const status_ptr = c.sqlite3_column_text(search_stmt, 2);
+            const owner_ptr = c.sqlite3_column_text(search_stmt, 3);
+            const path_ptr = c.sqlite3_column_text(search_stmt, 4);
+
+            const id_text: []const u8 = if (id_ptr != null) std.mem.span(id_ptr) else "<no-id>";
+            const title_text: []const u8 = if (title_ptr != null) std.mem.span(title_ptr) else "";
+            const status_text: []const u8 = if (status_ptr != null) std.mem.span(status_ptr) else "";
+            const owner_text: []const u8 = if (owner_ptr != null) std.mem.span(owner_ptr) else "";
+            const path_text: []const u8 = if (path_ptr != null) std.mem.span(path_ptr) else "";
+
+            std.debug.print("  {s}  {s:<12} {s:<12} {s}  ({s})\n", .{ id_text, status_text, owner_text, title_text, path_text });
         }
     }
 }

@@ -16,6 +16,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Changed | Upgraded Zig `report` to generate real SQLite output (`tickets` and `parse_errors` tables with indexes) and run SQL-based summary/search queries
 - 2026-03-03 | Changed | Implemented Zig `report` command stub output and expanded `new`/`ls`/`pick`/`claim` option parity (`--depends-on`, label filters, branch override, WIP/dependency controls)
 - 2026-03-03 | Added | Added Zig conformance fixture and runner support for stream-agnostic output assertions to validate non-Python port behavior
 - 2026-03-03 | Changed | Implemented Zig commands `pick`, `comment`, `graph`, `export`, and `stats` with basic parity behavior
