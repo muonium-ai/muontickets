@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -61,6 +61,12 @@ enum Commands {
         id: String,
         #[arg(long)]
         owner: String,
+        #[arg(long, default_value = "")]
+        branch: String,
+        #[arg(long = "ignore-deps")]
+        ignore_deps: bool,
+        #[arg(long)]
+        force: bool,
     },
     Comment {
         id: String,
@@ -69,17 +75,30 @@ enum Commands {
     SetStatus {
         id: String,
         status: String,
+        #[arg(long)]
+        force: bool,
+        #[arg(long = "clear-owner")]
+        clear_owner: bool,
     },
     Done {
         id: String,
+        #[arg(long)]
+        force: bool,
     },
     Archive {
         id: String,
+        #[arg(long)]
+        force: bool,
     },
     Graph,
     Export,
     Stats,
-    Validate,
+    Validate {
+        #[arg(long = "max-claimed-per-owner", default_value_t = 2)]
+        max_claimed_per_owner: i32,
+        #[arg(long = "enforce-done-deps")]
+        enforce_done_deps: bool,
+    },
     Report,
 }
 
@@ -423,6 +442,10 @@ fn map_get_string_array(meta: &Mapping, key: &str) -> Vec<String> {
     }
 }
 
+fn map_get_status(meta: &Mapping) -> String {
+    map_get_string(meta, "status").unwrap_or_else(|| "ready".to_string())
+}
+
 fn map_set_string(meta: &mut Mapping, key: &str, value: &str) {
     meta.insert(
         Value::String(key.to_string()),
@@ -493,6 +516,371 @@ fn find_ticket_by_id(repo_root: &Path, ticket_id: &str) -> Result<PathBuf> {
         return Err(anyhow!("Ticket not found: {}", path.display()));
     }
     Ok(path)
+}
+
+fn _default_branch(meta: &Mapping) -> String {
+    let title = map_get_string(meta, "title").unwrap_or_default().to_lowercase();
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for character in title.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character);
+            last_dash = false;
+        } else if !last_dash {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-').to_string();
+    let slug = if slug.is_empty() { "task".to_string() } else { slug };
+    let slug = if slug.len() > 40 {
+        slug.chars().take(40).collect::<String>()
+    } else {
+        slug
+    };
+    let id = map_get_string(meta, "id").unwrap_or_default().to_lowercase();
+    format!("bug/{id}-{slug}")
+}
+
+fn load_active_ticket_records(repo_root: &Path) -> Result<Vec<(PathBuf, Mapping)>> {
+    let mut records = Vec::new();
+    for path in iter_ticket_files(&tickets_dir(repo_root))? {
+        let (mut meta, _body) = read_ticket(&path)?;
+        normalize_meta(&mut meta);
+        records.push((path, meta));
+    }
+    Ok(records)
+}
+
+fn deps_satisfied(meta: &Mapping, id_to_meta: &BTreeMap<String, Mapping>) -> (bool, Vec<String>) {
+    let mut missing = Vec::new();
+    for dep in map_get_string_array(meta, "depends_on") {
+        match id_to_meta.get(&dep) {
+            Some(dep_meta) => {
+                if map_get_status(dep_meta) != "done" {
+                    missing.push(dep);
+                }
+            }
+            None => missing.push(dep),
+        }
+    }
+    (missing.is_empty(), missing)
+}
+
+fn validate_transition(old_status: &str, new_status: &str) -> Option<String> {
+    let mut allowed: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    allowed.insert("ready", BTreeSet::from(["claimed", "blocked"]));
+    allowed.insert("claimed", BTreeSet::from(["needs_review", "blocked", "ready"]));
+    allowed.insert("blocked", BTreeSet::from(["ready", "claimed"]));
+    allowed.insert("needs_review", BTreeSet::from(["done", "claimed"]));
+    allowed.insert("done", BTreeSet::new());
+
+    let Some(next_states) = allowed.get(old_status) else {
+        return Some(format!("unknown old status {old_status:?}"));
+    };
+    if !DEFAULT_STATES.contains(&new_status) {
+        return Some(format!("unknown new status {new_status:?}"));
+    }
+    if !next_states.contains(new_status) {
+        return Some(format!("invalid transition {old_status:?} -> {new_status:?}"));
+    }
+    None
+}
+
+fn cmd_claim(id: String, owner: String, branch: String, ignore_deps: bool, force: bool) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let path = find_ticket_by_id(&repo, &id)?;
+    let (mut meta, body) = read_ticket(&path)?;
+    normalize_meta(&mut meta);
+    let old = map_get_status(&meta);
+
+    if old != "ready" && !force {
+        return Err(anyhow!(
+            "Refusing to claim: status is {old:?} (expected 'ready'). Use --force to override."
+        ));
+    }
+
+    let records = load_active_ticket_records(&repo)?;
+    let mut id_to_meta = BTreeMap::new();
+    for (_path, ticket_meta) in records {
+        if let Some(tid) = map_get_string(&ticket_meta, "id") {
+            id_to_meta.insert(tid, ticket_meta);
+        }
+    }
+    let (ok, missing) = deps_satisfied(&meta, &id_to_meta);
+    if !ok && !ignore_deps {
+        return Err(anyhow!(
+            "Refusing to claim: dependencies not done: {:?}. Use --ignore-deps to override.",
+            missing
+        ));
+    }
+
+    map_set_string(&mut meta, "status", "claimed");
+    map_set_string(&mut meta, "owner", &owner);
+    let branch_name = if branch.trim().is_empty() {
+        _default_branch(&meta)
+    } else {
+        branch.trim().to_string()
+    };
+    map_set_string(&mut meta, "branch", &branch_name);
+    map_set_string(&mut meta, "updated", &today_str());
+    write_ticket(&path, &meta, &body)?;
+    println!("claimed {id} as {owner} (branch: {branch_name})");
+    Ok(0)
+}
+
+fn cmd_set_status(id: String, status: String, force: bool, clear_owner: bool) -> Result<i32> {
+    if !DEFAULT_STATES.contains(&status.as_str()) {
+        return Err(anyhow!("Invalid status {status:?}. Allowed: {:?}", DEFAULT_STATES));
+    }
+
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let path = find_ticket_by_id(&repo, &id)?;
+    let (mut meta, body) = read_ticket(&path)?;
+    normalize_meta(&mut meta);
+
+    let old = map_get_status(&meta);
+    if old == status {
+        println!("{id} already {status}");
+        return Ok(0);
+    }
+
+    if !force {
+        if let Some(message) = validate_transition(&old, &status) {
+            return Err(anyhow!("Refusing: {message}. Use --force to override."));
+        }
+    }
+
+    if status == "ready" && clear_owner {
+        map_set_optional_string(&mut meta, "owner", None);
+        map_set_optional_string(&mut meta, "branch", None);
+    }
+    map_set_string(&mut meta, "status", &status);
+    map_set_string(&mut meta, "updated", &today_str());
+    write_ticket(&path, &meta, &body)?;
+    println!("{id}: {old} -> {status}");
+    Ok(0)
+}
+
+fn cmd_done(id: String, force: bool) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let path = find_ticket_by_id(&repo, &id)?;
+    let (mut meta, body) = read_ticket(&path)?;
+    normalize_meta(&mut meta);
+
+    let old = map_get_status(&meta);
+    if old != "needs_review" && !force {
+        return Err(anyhow!(
+            "Refusing to mark done: status is {old:?} (expected 'needs_review'). Use set-status first or --force."
+        ));
+    }
+
+    map_set_string(&mut meta, "status", "done");
+    map_set_string(&mut meta, "updated", &today_str());
+    write_ticket(&path, &meta, &body)?;
+    println!("done {id}");
+    Ok(0)
+}
+
+fn cmd_archive(id: String, force: bool) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let path = find_ticket_by_id(&repo, &id)?;
+    let (mut meta, _body) = read_ticket(&path)?;
+    normalize_meta(&mut meta);
+
+    let status = map_get_status(&meta);
+    if status != "done" && !force {
+        return Err(anyhow!(
+            "Refusing to archive: status is {status:?} (expected 'done'). Use --force to override."
+        ));
+    }
+
+    let mut dependents = Vec::new();
+    for candidate in load_active_ticket_records(&repo)? {
+        let (_candidate_path, candidate_meta) = candidate;
+        let candidate_id = map_get_string(&candidate_meta, "id").unwrap_or_default();
+        if candidate_id == id {
+            continue;
+        }
+        let deps = map_get_string_array(&candidate_meta, "depends_on");
+        if deps.iter().any(|dep| dep == &id) {
+            dependents.push(candidate_id);
+        }
+    }
+
+    if !dependents.is_empty() && !force {
+        dependents.sort();
+        return Err(anyhow!(
+            "Refusing to archive: active tickets depend on this ticket: {}. Resolve/update their depends_on first. Warning: using --force can leave invalid active references to archived tickets.",
+            dependents.join(", ")
+        ));
+    }
+    if !dependents.is_empty() && force {
+        dependents.sort();
+        eprintln!(
+            "Warning: force-archiving with active dependents: {}. This can create invalid board state where active tickets depend_on archived tickets.",
+            dependents.join(", ")
+        );
+    }
+
+    let target_dir = archive_dir(&repo);
+    fs::create_dir_all(&target_dir)?;
+    let destination = target_dir.join(
+        path.file_name()
+            .ok_or_else(|| anyhow!("missing archive filename"))?,
+    );
+    if destination.exists() {
+        return Err(anyhow!(
+            "Refusing to archive: destination already exists: {}",
+            destination.display()
+        ));
+    }
+    fs::rename(&path, &destination)?;
+    let rel = destination
+        .strip_prefix(&repo)
+        .unwrap_or(&destination)
+        .display()
+        .to_string();
+    println!("archived {id} -> {rel}");
+    Ok(0)
+}
+
+fn validate_wip_limit(records: &[(PathBuf, Mapping)], max_claimed_per_owner: i32) -> Vec<String> {
+    let mut counts: BTreeMap<String, i32> = BTreeMap::new();
+    for (_path, meta) in records {
+        if map_get_status(meta) == "claimed" {
+            let owner = map_get_string(meta, "owner").unwrap_or_default();
+            if !owner.is_empty() {
+                let entry = counts.entry(owner).or_insert(0);
+                *entry += 1;
+            }
+        }
+    }
+
+    let mut errors = Vec::new();
+    for (owner, count) in counts {
+        if count > max_claimed_per_owner {
+            errors.push(format!(
+                "owner {owner:?} has {count} claimed tickets (max {max_claimed_per_owner})"
+            ));
+        }
+    }
+    errors
+}
+
+fn validate_depends(records: &[(PathBuf, Mapping)], archived_ids: &BTreeSet<String>) -> Vec<String> {
+    let mut existing: BTreeSet<String> = BTreeSet::new();
+    for (_path, meta) in records {
+        if let Some(ticket_id) = map_get_string(meta, "id") {
+            existing.insert(ticket_id);
+        }
+    }
+
+    let mut errors = Vec::new();
+    for (_path, meta) in records {
+        let ticket_id = map_get_string(meta, "id").unwrap_or_else(|| "<missing-id>".to_string());
+        for dep in map_get_string_array(meta, "depends_on") {
+            if !existing.contains(&dep) {
+                if archived_ids.contains(&dep) {
+                    errors.push(format!(
+                        "{ticket_id} depends_on archived ticket {dep} (fix by unarchiving {dep} or removing/updating {ticket_id}.depends_on; avoid mt archive --force when active dependents exist)"
+                    ));
+                } else {
+                    errors.push(format!("{ticket_id} depends_on missing ticket {dep}"));
+                }
+            }
+        }
+    }
+    errors
+}
+
+fn cmd_validate(max_claimed_per_owner: i32, enforce_done_deps: bool) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let mut records = Vec::new();
+    let mut errors = Vec::new();
+
+    for path in iter_ticket_files(&tickets_dir(&repo))? {
+        match read_ticket(&path) {
+            Ok((mut meta, _body)) => {
+                normalize_meta(&mut meta);
+                records.push((path.clone(), meta));
+            }
+            Err(err) => {
+                let name = path.file_name().and_then(|f| f.to_str()).unwrap_or("<unknown>");
+                errors.push(format!("{name}: {err}"));
+            }
+        }
+    }
+
+    let mut archived_ids = BTreeSet::new();
+    let mut archived_paths = Vec::new();
+    iter_ticket_files_recursive(&archive_dir(&repo), &mut archived_paths)?;
+    for archived_path in archived_paths {
+        if let Ok((mut meta, _body)) = read_ticket(&archived_path) {
+            normalize_meta(&mut meta);
+            if let Some(ticket_id) = map_get_string(&meta, "id") {
+                archived_ids.insert(ticket_id);
+            }
+        }
+    }
+
+    for (path, meta) in &records {
+        let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("<unknown>");
+        let status = map_get_status(meta);
+        if !DEFAULT_STATES.contains(&status.as_str()) {
+            errors.push(format!("{filename}: status must be one of {:?}, got {status:?}", DEFAULT_STATES));
+        }
+        let effort = map_get_string(meta, "effort").unwrap_or_else(|| "s".to_string());
+        if !DEFAULT_EFFORTS.contains(&effort.as_str()) {
+            errors.push(format!("{filename}: effort must be one of {:?}, got {effort:?}", DEFAULT_EFFORTS));
+        }
+        if status == "claimed" && map_get_string(meta, "owner").unwrap_or_default().is_empty() {
+            errors.push(format!("{filename}: claimed ticket must have owner"));
+        }
+        if (status == "needs_review" || status == "done")
+            && map_get_string(meta, "branch").unwrap_or_default().is_empty()
+        {
+            errors.push(format!("{filename}: status {status} should have branch set"));
+        }
+    }
+
+    errors.extend(validate_wip_limit(&records, max_claimed_per_owner));
+    errors.extend(validate_depends(&records, &archived_ids));
+
+    if enforce_done_deps {
+        let mut id_to_meta = BTreeMap::new();
+        for (_path, meta) in &records {
+            if let Some(ticket_id) = map_get_string(meta, "id") {
+                id_to_meta.insert(ticket_id, meta.clone());
+            }
+        }
+        for (_path, meta) in &records {
+            let status = map_get_status(meta);
+            if status == "claimed" || status == "needs_review" || status == "done" {
+                let (ok, missing) = deps_satisfied(meta, &id_to_meta);
+                if !ok && !map_get_string_array(meta, "depends_on").is_empty() {
+                    let ticket_id = map_get_string(meta, "id").unwrap_or_else(|| "<missing-id>".to_string());
+                    errors.push(format!("{ticket_id} status {status} but deps not done: {:?}", missing));
+                }
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        eprintln!("MuonTickets validation FAILED:");
+        for error in errors {
+            eprintln!(" - {error}");
+        }
+        return Ok(1);
+    }
+
+    println!("MuonTickets validation OK.");
+    Ok(0)
 }
 
 fn cmd_init() -> Result<i32> {
@@ -778,26 +1166,25 @@ fn run() -> Result<i32> {
             println!("TODO: pick (Rust port): owner={owner}");
             Ok(0)
         }
-        Commands::Claim { id, owner } => {
-            println!("TODO: claim (Rust port): {id} owner={owner}");
-            Ok(0)
-        }
+        Commands::Claim {
+            id,
+            owner,
+            branch,
+            ignore_deps,
+            force,
+        } => cmd_claim(id, owner, branch, ignore_deps, force),
         Commands::Comment { id, text } => {
             println!("TODO: comment (Rust port): {id} text={text}");
             Ok(0)
         }
-        Commands::SetStatus { id, status } => {
-            println!("TODO: set-status (Rust port): {id} -> {status}");
-            Ok(0)
-        }
-        Commands::Done { id } => {
-            println!("TODO: done (Rust port): {id}");
-            Ok(0)
-        }
-        Commands::Archive { id } => {
-            println!("TODO: archive (Rust port): {id}");
-            Ok(0)
-        }
+        Commands::SetStatus {
+            id,
+            status,
+            force,
+            clear_owner,
+        } => cmd_set_status(id, status, force, clear_owner),
+        Commands::Done { id, force } => cmd_done(id, force),
+        Commands::Archive { id, force } => cmd_archive(id, force),
         Commands::Graph => {
             println!("TODO: graph (Rust port)");
             Ok(0)
@@ -810,10 +1197,10 @@ fn run() -> Result<i32> {
             println!("TODO: stats (Rust port)");
             Ok(0)
         }
-        Commands::Validate => {
-            println!("TODO: validate (Rust port)");
-            Ok(0)
-        }
+        Commands::Validate {
+            max_claimed_per_owner,
+            enforce_done_deps,
+        } => cmd_validate(max_claimed_per_owner, enforce_done_deps),
         Commands::Report => {
             println!("TODO: report (Rust port)");
             Ok(0)
