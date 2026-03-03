@@ -733,6 +733,72 @@ fn typeAllowed(ticket_type: []const u8) bool {
     return false;
 }
 
+fn priorityWeight(priority: []const u8) i64 {
+    if (std.mem.eql(u8, priority, "p0")) return 300;
+    if (std.mem.eql(u8, priority, "p1")) return 200;
+    if (std.mem.eql(u8, priority, "p2")) return 100;
+    return 0;
+}
+
+fn effortWeight(effort: []const u8) i64 {
+    if (std.mem.eql(u8, effort, "xs")) return 40;
+    if (std.mem.eql(u8, effort, "s")) return 30;
+    if (std.mem.eql(u8, effort, "m")) return 20;
+    if (std.mem.eql(u8, effort, "l")) return 10;
+    return 0;
+}
+
+fn daysFromCivil(year: i64, month: i64, day: i64) i64 {
+    var y = year;
+    y -= if (month <= 2) 1 else 0;
+    const era = @divFloor(y, 400);
+    const yoe = y - era * 400;
+    const mp = month + (if (month > 2) @as(i64, -3) else @as(i64, 9));
+    const doy = @divFloor(153 * mp + 2, 5) + day - 1;
+    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
+    return era * 146097 + doe - 719468;
+}
+
+fn parseIsoDateDays(date: []const u8) ?i64 {
+    if (date.len < 10) return null;
+    if (date[4] != '-' or date[7] != '-') return null;
+    const y = std.fmt.parseInt(i64, date[0..4], 10) catch return null;
+    const m = std.fmt.parseInt(i64, date[5..7], 10) catch return null;
+    const d = std.fmt.parseInt(i64, date[8..10], 10) catch return null;
+    if (m < 1 or m > 12 or d < 1 or d > 31) return null;
+    return daysFromCivil(y, m, d);
+}
+
+fn computePickScore(repo: []const u8, allocator: std.mem.Allocator, content: []const u8, ignore_deps: bool) f64 {
+    const pr = parseMetaField(content, "priority") orelse "p2";
+    const eff = parseMetaField(content, "effort") orelse "s";
+    const deps_raw = parseMetaField(content, "depends_on") orelse "[]";
+    const created = parseMetaField(content, "created") orelse "1970-01-01";
+
+    var deps_count: i64 = 0;
+    var deps = listItems(allocator, deps_raw) catch return -1e9;
+    defer freeListItems(allocator, &deps);
+    deps_count = @intCast(deps.items.len);
+
+    if (!ignore_deps and !depsSatisfied(repo, allocator, content)) {
+        return -1e9;
+    }
+    if (ignore_deps and !depsSatisfied(repo, allocator, content)) {
+        return -1e9;
+    }
+
+    const base = priorityWeight(pr) + effortWeight(eff);
+    const dep_penalty = 5 * deps_count;
+
+    const now_days: i64 = @divFloor(std.time.timestamp(), 86400);
+    const created_days = parseIsoDateDays(created) orelse now_days;
+    var age_days: i64 = now_days - created_days;
+    if (age_days < 0) age_days = 0;
+    if (age_days > 365) age_days = 365;
+
+    return @floatFromInt(base + age_days - dep_penalty);
+}
+
 fn listLiteral(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
     var out = try std.ArrayList(u8).initCapacity(allocator, 32 + (items.len * 16));
     errdefer out.deinit(allocator);
@@ -1272,6 +1338,17 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         std.process.exit(2);
     }
 
+    const Candidate = struct {
+        path: []u8,
+        content: []u8,
+        id: []u8,
+        title: []u8,
+        updated: []u8,
+        score: f64,
+    };
+
+    var best: ?Candidate = null;
+
     var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
     defer dir.close();
     var it = dir.iterate();
@@ -1309,30 +1386,78 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             }
         }
         if (avoid_hit) continue;
-        if (!ignore_deps and !depsSatisfied(repo, allocator, content)) continue;
-
+        const score = computePickScore(repo, allocator, content, ignore_deps);
         const id = parseMetaField(content, "id") orelse entry.name[0..8];
         const title = parseMetaField(content, "title") orelse "task";
-        const branch = if (explicit_branch) |b| try allocator.dupe(u8, b) else try defaultBranch(allocator, id, title);
-        defer allocator.free(branch);
+        const updated = parseMetaField(content, "updated") orelse "";
 
-        const next = try setMetaField(allocator, content, "status", "claimed");
-        defer allocator.free(next);
-        const next2 = try setMetaField(allocator, next, "owner", owner);
-        defer allocator.free(next2);
-        const next3 = try setMetaField(allocator, next2, "branch", branch);
-        defer allocator.free(next3);
-        try std.fs.cwd().writeFile(.{ .sub_path = path, .data = next3 });
-        if (json_out) {
-            std.debug.print("{{\"picked\":\"{s}\",\"owner\":\"{s}\",\"branch\":\"{s}\",\"score\":0.0}}\n", .{ id, owner, branch });
-        } else {
-            std.debug.print("picked {s} (score 0.0) -> claimed as {s} (branch: {s})\n", .{ id, owner, branch });
+        const better = if (best == null)
+            true
+        else blk: {
+            const b = best.?;
+            if (score > b.score) break :blk true;
+            if (score < b.score) break :blk false;
+            const upd_cmp = std.mem.order(u8, updated, b.updated);
+            if (upd_cmp == .lt) break :blk true;
+            if (upd_cmp == .gt) break :blk false;
+            break :blk std.mem.order(u8, id, b.id) == .lt;
+        };
+
+        if (!better) continue;
+
+        if (best) |b| {
+            allocator.free(b.path);
+            allocator.free(b.content);
+            allocator.free(b.id);
+            allocator.free(b.title);
+            allocator.free(b.updated);
         }
-        return;
+
+        best = .{
+            .path = try allocator.dupe(u8, path),
+            .content = try allocator.dupe(u8, content),
+            .id = try allocator.dupe(u8, id),
+            .title = try allocator.dupe(u8, title),
+            .updated = try allocator.dupe(u8, updated),
+            .score = score,
+        };
     }
 
-    std.debug.print("no claimable tickets found (ready + deps satisfied + filters).\n", .{});
-    std.process.exit(3);
+    if (best == null) {
+        std.debug.print("no claimable tickets found (ready + deps satisfied + filters).\n", .{});
+        std.process.exit(3);
+    }
+
+    const chosen = best.?;
+    defer {
+        allocator.free(chosen.path);
+        allocator.free(chosen.content);
+        allocator.free(chosen.id);
+        allocator.free(chosen.title);
+        allocator.free(chosen.updated);
+    }
+
+    const branch = if (explicit_branch) |b| try allocator.dupe(u8, b) else try defaultBranch(allocator, chosen.id, chosen.title);
+    defer allocator.free(branch);
+
+    const next = try setMetaField(allocator, chosen.content, "status", "claimed");
+    defer allocator.free(next);
+    const next2 = try setMetaField(allocator, next, "owner", owner);
+    defer allocator.free(next2);
+    const next3 = try setMetaField(allocator, next2, "branch", branch);
+    defer allocator.free(next3);
+    const score_text = try std.fmt.allocPrint(allocator, "{d:.1}", .{chosen.score});
+    defer allocator.free(score_text);
+    const next4 = try setMetaField(allocator, next3, "score", score_text);
+    defer allocator.free(next4);
+    try std.fs.cwd().writeFile(.{ .sub_path = chosen.path, .data = next4 });
+
+    if (json_out) {
+        std.debug.print("{{\"picked\":\"{s}\",\"owner\":\"{s}\",\"branch\":\"{s}\",\"score\":{d:.1}}}\n", .{ chosen.id, owner, branch, chosen.score });
+    } else {
+        std.debug.print("picked {s} (score {d:.1}) -> claimed as {s} (branch: {s})\n", .{ chosen.id, chosen.score, owner, branch });
+    }
+    return;
 }
 
 fn cmdGraph(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {

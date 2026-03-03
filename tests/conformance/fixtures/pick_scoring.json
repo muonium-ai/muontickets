@@ -1,0 +1,36 @@
+{
+  "name": "pick_scoring",
+  "description": "Validates score-based pick selection and score emission semantics.",
+  "steps": [
+    {
+      "name": "init board",
+      "args": ["init"],
+      "expect_exit": 0,
+      "expect_output_contains": ["created"]
+    },
+    {
+      "name": "create low score ticket",
+      "args": ["new", "Low", "--priority", "p2", "--effort", "xs"],
+      "expect_exit": 0,
+      "expect_output_contains": ["T-000002.md"]
+    },
+    {
+      "name": "create high score ticket",
+      "args": ["new", "High", "--priority", "p0", "--effort", "l"],
+      "expect_exit": 0,
+      "expect_output_contains": ["T-000003.md"]
+    },
+    {
+      "name": "pick highest score",
+      "args": ["pick", "--owner", "agent-score"],
+      "expect_exit": 0,
+      "expect_output_contains": ["picked T-000003", "score"]
+    },
+    {
+      "name": "pick json emits numeric score",
+      "args": ["pick", "--owner", "agent-score2", "--json"],
+      "expect_exit": 0,
+      "expect_output_contains": ["\"picked\"", "\"score\":"]
+    }
+  ]
+}
