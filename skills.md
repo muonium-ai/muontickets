@@ -68,6 +68,22 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py pick --owner agent-1
 uv run python3 tickets/mt/muontickets/muontickets/mt.py claim T-000123 --owner agent-1
 ```
 
+### Queue-style allocation (lease + retry)
+
+```bash
+# Allocate one task for an agent (default lease: 5 minutes)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py allocate-task --owner agent-1
+
+# Allocate with role/skill profile routing
+uv run python3 tickets/mt/muontickets/muontickets/mt.py allocate-task --owner agent-1 --skill design
+uv run python3 tickets/mt/muontickets/muontickets/mt.py allocate-task --owner agent-2 --role devops
+
+# Report failed attempt (increments retry_count and re-queues)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py fail-task T-000123 --error "build failed"
+
+# On retry-limit exhaustion, ticket is moved to tickets/errors/ for manual resolution
+```
+
 ### Comment progress
 
 ```bash
@@ -109,6 +125,8 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py archive T-000123
 - Parallelization rule: if tickets are independent and can be completed by isolated agents without impacting shared system behavior, assign multiple agents to run in parallel.
 - Temp artifact hygiene: use project-local `tmp/<agent-name>/` for scratch/build artifacts (avoid global `/tmp` assumptions in sandboxed environments).
 - Dependency handling: respect `depends_on`; do not start dependent work until prerequisites are done unless explicitly instructed.
+- Queue lease handling: allocated tickets have a lease window (default 5 minutes); expired leases may be reallocated and incident-logged.
+- Retry handling: use `fail-task` to record execution errors; when retry limit is reached, investigate `tickets/errors/` and `tickets/incidents.log`.
 - Build hygiene: prefer Makefile targets where possible; use `make clean` as the standard cleanup step for project temp state.
 - Test order: run a basic smoke test first, then broader suites, to surface breakage early and reduce CI churn.
 - Validation cadence: run `mt validate` before commit/push and after ticket metadata updates.

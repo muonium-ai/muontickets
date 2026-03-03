@@ -47,17 +47,47 @@ class Metrics:
         self.lock = threading.Lock()
         self.ok = Counter()
         self.fail = Counter()
+        self.fail_reason = Counter()
 
-    def mark(self, key: str, success: bool) -> None:
+    def mark(self, key: str, success: bool, reason: str | None = None) -> None:
         with self.lock:
             if success:
                 self.ok[key] += 1
             else:
                 self.fail[key] += 1
+                self.fail_reason[f"{key}::{reason or 'unknown'}"] += 1
 
-    def snapshot(self) -> Tuple[Counter, Counter]:
+    def snapshot(self) -> Tuple[Counter, Counter, Counter]:
         with self.lock:
-            return Counter(self.ok), Counter(self.fail)
+            return Counter(self.ok), Counter(self.fail), Counter(self.fail_reason)
+
+
+def classify_failure(result: CmdResult) -> str:
+    text = f"{result.err}\n{result.out}".lower()
+    if "no claimable tickets found" in text or "no allocatable tickets found" in text:
+        return "no_candidate"
+    if "already has" in text and "claimed" in text:
+        return "wip_limit"
+    if "dependencies not done" in text or "deps not done" in text:
+        return "deps_not_done"
+    if "ticket not found" in text:
+        return "ticket_not_found"
+    if "invalid transition" in text or "expected 'needs_review'" in text or "expected 'ready'" in text:
+        return "status_precondition"
+    if "destination already exists" in text:
+        return "destination_exists"
+    if "parse_error" in text or "missing yaml frontmatter" in text:
+        return "parse_error"
+    if "invalid" in text and "id" in text:
+        return "invalid_id"
+    return "other"
+
+
+def record_result(metrics: Metrics, op: str, result: CmdResult) -> None:
+    if result.code == 0:
+        metrics.mark(op, True)
+        return
+    metrics.mark(op, False, classify_failure(result))
 
 
 ROLE_TYPES: Dict[str, List[str]] = {
@@ -95,7 +125,7 @@ def create_ticket_for_role(runner: Runner, role: str, rng: random.Random, metric
     label = rng.choice(ROLE_LABELS[role])
     title = f"{role} task {rng.randint(1, 999999)}"
     result = runner.run(["new", title, "--type", typ, "--priority", rng.choice(["p0", "p1", "p2"]), "--label", label])
-    metrics.mark("create", result.code == 0)
+    record_result(metrics, "create", result)
 
 
 def dispatcher_loop(
@@ -110,7 +140,7 @@ def dispatcher_loop(
     while not stop_event.is_set():
         res = runner.run(["ls", "--status", "ready"])
         if res.code != 0:
-            metrics.mark("dispatch_scan", False)
+            record_result(metrics, "dispatch_scan", res)
             time.sleep(poll_interval)
             continue
         ready_ids = parse_ids(res.out)
@@ -119,7 +149,7 @@ def dispatcher_loop(
         for tid in ready_ids[:10]:
             show = runner.run(["show", tid])
             if show.code != 0:
-                metrics.mark("dispatch_show", False)
+                record_result(metrics, "dispatch_show", show)
                 continue
             metrics.mark("dispatch_show", True)
             text = show.out + show.err
@@ -138,7 +168,7 @@ def dispatcher_loop(
                 assigned_role = rng.choice(roles)
 
             claim = runner.run(["claim", tid, "--owner", assigned_role, "--ignore-deps"])
-            metrics.mark("dispatch_claim", claim.code == 0)
+            record_result(metrics, "dispatch_claim", claim)
         time.sleep(poll_interval)
 
 
@@ -181,7 +211,7 @@ def worker_loop(
                 "--max-claimed-per-owner",
                 "5",
             ])
-            metrics.mark("pick", pick.code == 0)
+            record_result(metrics, "pick", pick)
 
         elif op == "create":
             create_ticket_for_role(runner, role, rng, metrics)
@@ -191,7 +221,7 @@ def worker_loop(
             if owned:
                 tid = rng.choice(owned)
                 result = runner.run(["comment", tid, f"progress from {role}"])
-                metrics.mark("comment", result.code == 0)
+                record_result(metrics, "comment", result)
             else:
                 metrics.mark("comment", True)
 
@@ -200,7 +230,7 @@ def worker_loop(
             if owned:
                 tid = rng.choice(owned)
                 result = runner.run(["set-status", tid, "needs_review", "--force"])
-                metrics.mark("set_needs_review", result.code == 0)
+                record_result(metrics, "set_needs_review", result)
             else:
                 metrics.mark("set_needs_review", True)
 
@@ -209,7 +239,7 @@ def worker_loop(
             if review_ids:
                 tid = rng.choice(review_ids)
                 result = runner.run(["done", tid, "--force"])
-                metrics.mark("done", result.code == 0)
+                record_result(metrics, "done", result)
             else:
                 metrics.mark("done", True)
 
@@ -218,7 +248,7 @@ def worker_loop(
             if done_ids:
                 tid = rng.choice(done_ids)
                 result = runner.run(["archive", tid, "--force"])
-                metrics.mark("archive", result.code == 0)
+                record_result(metrics, "archive", result)
             else:
                 metrics.mark("archive", True)
 
@@ -231,7 +261,7 @@ def seed_board(runner: Runner, count: int, rng: random.Random, metrics: Metrics)
         create_ticket_for_role(runner, rng.choice(roles), rng, metrics)
 
 
-def markdown_report(ok: Counter, fail: Counter, elapsed: float, threads: int, duration: int) -> str:
+def markdown_report(ok: Counter, fail: Counter, fail_reason: Counter, elapsed: float, threads: int, duration: int) -> str:
     ops = sorted(set(ok.keys()) | set(fail.keys()))
     lines = []
     lines.append("# Swarm Parallel Test Report")
@@ -252,6 +282,24 @@ def markdown_report(ok: Counter, fail: Counter, elapsed: float, threads: int, du
     lines.append("| Totals |")
     lines.append("|---|")
     lines.append(f"| Success={sum(ok.values())}, Fail={sum(fail.values())} |")
+
+    if fail_reason:
+        lines.append("")
+        lines.append("| Failure Reason | Count |")
+        lines.append("|---|---:|")
+        reason_counts = Counter()
+        for op_reason, count in fail_reason.items():
+            _op, reason = op_reason.split("::", 1)
+            reason_counts[reason] += count
+        for reason, count in reason_counts.most_common():
+            lines.append(f"| {reason} | {count} |")
+
+        lines.append("")
+        lines.append("| Operation Failure Reason | Count |")
+        lines.append("|---|---:|")
+        for op_reason, count in fail_reason.most_common():
+            op, reason = op_reason.split("::", 1)
+            lines.append(f"| {op}:{reason} | {count} |")
     return "\n".join(lines)
 
 
@@ -315,12 +363,12 @@ def main() -> int:
 
         # Final board checks and report generation.
         validate = runner.run(["validate", "--max-claimed-per-owner", "20"])
-        metrics.mark("final_validate", validate.code == 0)
+        record_result(metrics, "final_validate", validate)
         report = runner.run(["report", "--db", "tickets/tickets_report.sqlite3", "--search", "task", "--limit", "20"])
-        metrics.mark("final_report", report.code == 0)
+        record_result(metrics, "final_report", report)
 
-        ok, fail = metrics.snapshot()
-        print(markdown_report(ok, fail, elapsed, args.threads, args.duration))
+        ok, fail, fail_reason = metrics.snapshot()
+        print(markdown_report(ok, fail, fail_reason, elapsed, args.threads, args.duration))
 
     return 0
 

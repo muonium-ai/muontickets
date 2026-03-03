@@ -12,6 +12,13 @@ created: 1970-01-01
 updated: 1970-01-01
 depends_on: []
 branch: null
+retry_count: 0
+retry_limit: 3
+allocated_to: null
+allocated_at: null
+lease_expires_at: null
+last_error: null
+last_attempted_at: null
 ---
 
 ## Goal

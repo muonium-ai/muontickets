@@ -117,6 +117,7 @@ After submodule installation:
 Active tickets live in `tickets/`.
 Completed tickets can move to `tickets/archive/`.
 Future work can be staged in `tickets/backlog/`.
+Retry-exhausted tickets can move to `tickets/errors/` for manual triage.
 
 MuonTickets logic lives in `tickets/mt/muontickets/` as a submodule in consumer repositories,
 or in the repository root when developing MuonTickets core directly.
@@ -143,6 +144,15 @@ State transitions are validated and enforced.
 
 Dependencies prevent premature claiming.
 
+Queue-mode lifecycle extension:
+
+- `mt allocate-task --owner <agent>` allocates one ticket and returns ticket id.
+- Allocation creates a lease (`lease_expires_at`, default 5 minutes).
+- Expired leases can be reallocated to another agent.
+- Reallocation and retry-limit events are written to `tickets/incidents.log`.
+- `mt fail-task <id> --error "..."` increments `retry_count` and re-queues.
+- When `retry_count >= retry_limit`, ticket is moved to `tickets/errors/` for manual resolution.
+
 ------------------------------------------------------------------------
 
 # 6. Agent Swarm Workflow
@@ -150,7 +160,7 @@ Dependencies prevent premature claiming.
 Agent loop:
 
 1.  `git pull`
-2.  `mt pick --owner agent-X`
+2.  `mt allocate-task --owner agent-X` (queue mode) or `mt pick --owner agent-X` (score mode)
 3.  Create branch from ticket branch name
 4.  Implement feature
 5.  Run project checks/tests as applicable
@@ -171,6 +181,8 @@ This enables:
 -   Self-scheduling agents
 -   Minimal conflict zones
 -   Automatic prioritization
+-   Lease-aware task allocation
+-   Built-in retries and error triage path
 
 ------------------------------------------------------------------------
 

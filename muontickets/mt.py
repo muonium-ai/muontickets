@@ -17,6 +17,8 @@ Commands (high level):
   mt ls [filters]
   mt show T-000123
   mt pick --owner agent-1 [--label wasm]     # choose best ready ticket, claim it
+    mt allocate-task --owner agent-1            # queue allocator, returns one ticket id
+    mt fail-task T-000123 --error "..."        # record failed attempt and retry/escalate
   mt claim T-000123 --owner agent-1
   mt comment T-000123 "…"
   mt set-status T-000123 needs_review
@@ -29,6 +31,7 @@ Commands (high level):
 Design choices for "best agent ticketing":
 - Deterministic schema + validation
 - Dependency-aware picking (no starting work when deps not done)
+- Lease-based allocation + retry routing (queue mode)
 - WIP limit enforcement (per owner)
 - A single blessed entrypoint for CI/hooks (`mt validate`)
 
@@ -58,6 +61,19 @@ DEFAULT_PRIORITIES = ["p0", "p1", "p2"]
 DEFAULT_TYPES = ["spec", "code", "tests", "docs", "refactor", "chore"]
 DEFAULT_EFFORTS = ["xs", "s", "m", "l"]
 TICKET_TEMPLATE_NAME = "ticket.template"
+
+SKILL_PICK_PROFILES: Dict[str, Dict[str, List[str]]] = {
+    "design": {"labels": ["design"], "types": ["spec", "docs"]},
+    "database": {"labels": ["database"], "types": ["code", "refactor", "tests"]},
+    "review": {"labels": ["review"], "types": ["tests", "docs"]},
+}
+
+ROLE_PICK_PROFILES: Dict[str, Dict[str, List[str]]] = {
+    "architect": {"labels": ["design"], "types": ["spec", "docs", "refactor"]},
+    "devops": {"labels": ["devops"], "types": ["code", "chore", "docs"]},
+    "developer": {"labels": ["feature"], "types": ["code", "tests", "refactor"]},
+    "reviewer": {"labels": ["review"], "types": ["tests", "docs"]},
+}
 
 # Allowed transitions (strict by default)
 ALLOWED_TRANSITIONS = {
@@ -163,8 +179,14 @@ def tickets_dir(repo_root: str) -> str:
 def archive_dir(repo_root: str) -> str:
     return os.path.join(repo_root, "tickets", "archive")
 
+def errors_dir(repo_root: str) -> str:
+    return os.path.join(repo_root, "tickets", "errors")
+
 def backlogs_dir(repo_root: str) -> str:
     return os.path.join(repo_root, "tickets", "backlogs")
+
+def incidents_log_path(repo_root: str) -> str:
+    return os.path.join(tickets_dir(repo_root), "incidents.log")
 
 def ticket_template_path(repo_root: str) -> str:
     return os.path.join(tickets_dir(repo_root), TICKET_TEMPLATE_NAME)
@@ -232,7 +254,7 @@ def iter_ticket_files_recursive(root_dir: str) -> List[str]:
 
 def all_ticket_paths(repo_root: str) -> List[str]:
     paths: List[str] = []
-    for root in (tickets_dir(repo_root), archive_dir(repo_root), backlogs_dir(repo_root)):
+    for root in (tickets_dir(repo_root), archive_dir(repo_root), backlogs_dir(repo_root), errors_dir(repo_root)):
         paths.extend(iter_ticket_files_recursive(root))
     # de-duplicate while preserving sorted order
     return sorted(set(paths))
@@ -348,7 +370,44 @@ def normalize_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
     meta.setdefault("branch", None)
     meta.setdefault("effort", "s")
     meta.setdefault("tags", [])
+    meta.setdefault("retry_count", 0)
+    meta.setdefault("retry_limit", 3)
+    meta.setdefault("allocated_to", None)
+    meta.setdefault("allocated_at", None)
+    meta.setdefault("lease_expires_at", None)
+    meta.setdefault("last_error", None)
+    meta.setdefault("last_attempted_at", None)
     return meta
+
+def now_utc_iso() -> str:
+    return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+def parse_utc_iso(ts: Any) -> Optional[_dt.datetime]:
+    if not isinstance(ts, str) or not ts.strip():
+        return None
+    t = ts.strip()
+    if t.endswith("Z"):
+        t = t[:-1] + "+00:00"
+    try:
+        parsed = _dt.datetime.fromisoformat(t)
+    except Exception:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+    return parsed
+
+def lease_expired(meta: Dict[str, Any], now: Optional[_dt.datetime] = None) -> bool:
+    lease_raw = meta.get("lease_expires_at")
+    lease_dt = parse_utc_iso(lease_raw)
+    if lease_dt is None:
+        return False
+    check_now = now or _dt.datetime.utcnow()
+    return check_now >= lease_dt
+
+def append_incident(repo_root: str, message: str) -> None:
+    ensure_tickets_dir(tickets_dir(repo_root))
+    with open(incidents_log_path(repo_root), "a", encoding="utf-8") as f:
+        f.write(f"{now_utc_iso()} {message}\n")
 
 def default_ticket_template_text() -> str:
     return """---
@@ -365,6 +424,13 @@ created: 1970-01-01
 updated: 1970-01-01
 depends_on: []
 branch: null
+retry_count: 0
+retry_limit: 3
+allocated_to: null
+allocated_at: null
+lease_expires_at: null
+last_error: null
+last_attempted_at: null
 ---
 
 ## Goal
@@ -1042,6 +1108,30 @@ def cmd_pick(args: argparse.Namespace) -> int:
         eprint(f"owner {args.owner!r} already has {claimed_count} claimed tickets (max {args.max_claimed_per_owner}).")
         return 2
 
+    required_labels: List[str] = list(args.label)
+    avoid_labels: List[str] = list(args.avoid_label)
+    type_candidates: Optional[set[str]] = {args.type} if args.type else None
+
+    if args.skill:
+        prof = SKILL_PICK_PROFILES[args.skill]
+        for label in prof.get("labels", []):
+            if label not in required_labels:
+                required_labels.append(label)
+        skill_types = set(prof.get("types", []))
+        type_candidates = skill_types if type_candidates is None else type_candidates & skill_types
+
+    if args.role:
+        prof = ROLE_PICK_PROFILES[args.role]
+        for label in prof.get("labels", []):
+            if label not in required_labels:
+                required_labels.append(label)
+        role_types = set(prof.get("types", []))
+        type_candidates = role_types if type_candidates is None else type_candidates & role_types
+
+    if type_candidates is not None and not type_candidates:
+        eprint("no compatible type filter remains after combining --type/--skill/--role")
+        return 2
+
     candidates = []
     for t in tickets:
         if "_parse_error" in t.meta:
@@ -1052,15 +1142,15 @@ def cmd_pick(args: argparse.Namespace) -> int:
             continue
         if args.priority and meta.get("priority") != args.priority:
             continue
-        if args.type and meta.get("type") != args.type:
+        if type_candidates is not None and meta.get("type") not in type_candidates:
             continue
-        if args.label:
+        if required_labels:
             labels = set(meta.get("labels") or [])
-            if not set(args.label).issubset(labels):
+            if not set(required_labels).issubset(labels):
                 continue
-        if args.avoid_label:
+        if avoid_labels:
             labels = set(meta.get("labels") or [])
-            if set(args.avoid_label) & labels:
+            if set(avoid_labels) & labels:
                 continue
 
         # deps gate
@@ -1099,10 +1189,200 @@ def cmd_pick(args: argparse.Namespace) -> int:
         print(f"picked {tid} (score {score:.1f}) -> claimed as {args.owner} (branch: {meta['branch']})")
     return 0
 
+def cmd_allocate_task(args: argparse.Namespace) -> int:
+    """
+    Queue-style allocation primitive.
+    Allocates one task (ticket id), applies a lease, and supports stale lease re-allocation.
+    """
+    repo = find_repo_root()
+    tickets = load_all_tickets(repo)
+    schema = load_schema()
+
+    id_to_meta: Dict[str, Dict[str, Any]] = {}
+    for t in tickets:
+        if "_parse_error" in t.meta:
+            continue
+        m = normalize_meta(t.meta)
+        if validate_against_schema(m, schema):
+            continue
+        id_to_meta[m.get("id")] = m
+
+    claimed_count = 0
+    now = _dt.datetime.utcnow()
+    for m in id_to_meta.values():
+        if m.get("status") == "claimed" and (m.get("owner") or "") == args.owner:
+            if not lease_expired(m, now=now):
+                claimed_count += 1
+    if claimed_count >= args.max_claimed_per_owner:
+        eprint(f"owner {args.owner!r} already has {claimed_count} active leases (max {args.max_claimed_per_owner}).")
+        return 2
+
+    required_labels: List[str] = list(args.label)
+    avoid_labels: List[str] = list(args.avoid_label)
+    type_candidates: Optional[set[str]] = {args.type} if args.type else None
+
+    if args.skill:
+        prof = SKILL_PICK_PROFILES[args.skill]
+        for label in prof.get("labels", []):
+            if label not in required_labels:
+                required_labels.append(label)
+        skill_types = set(prof.get("types", []))
+        type_candidates = skill_types if type_candidates is None else type_candidates & skill_types
+
+    if args.role:
+        prof = ROLE_PICK_PROFILES[args.role]
+        for label in prof.get("labels", []):
+            if label not in required_labels:
+                required_labels.append(label)
+        role_types = set(prof.get("types", []))
+        type_candidates = role_types if type_candidates is None else type_candidates & role_types
+
+    if type_candidates is not None and not type_candidates:
+        eprint("no compatible type filter remains after combining --type/--skill/--role")
+        return 2
+
+    candidates = []
+    for t in tickets:
+        if "_parse_error" in t.meta:
+            continue
+        meta = normalize_meta(t.meta)
+        status = meta.get("status")
+        if status == "ready":
+            pass
+        elif status == "claimed":
+            if not lease_expired(meta, now=now):
+                continue
+        else:
+            continue
+
+        if args.priority and meta.get("priority") != args.priority:
+            continue
+        if type_candidates is not None and meta.get("type") not in type_candidates:
+            continue
+        if required_labels:
+            labels = set(meta.get("labels") or [])
+            if not set(required_labels).issubset(labels):
+                continue
+        if avoid_labels:
+            labels = set(meta.get("labels") or [])
+            if set(avoid_labels) & labels:
+                continue
+
+        ok, _missing = deps_satisfied(meta, id_to_meta)
+        if not ok and not args.ignore_deps:
+            continue
+
+        score = compute_score(meta, id_to_meta)
+        candidates.append((score, meta.get("updated", ""), meta.get("id"), t.path))
+
+    if not candidates:
+        eprint("no allocatable tickets found (ready or lease-expired claimed + deps satisfied + filters).")
+        return 3
+
+    candidates.sort(key=lambda x: (-x[0], x[1], x[2]))
+    score, _updated, tid, path = candidates[0]
+
+    ticket = read_ticket(path)
+    meta = normalize_meta(ticket.meta)
+
+    previous_owner = meta.get("owner")
+    previous_lease = meta.get("lease_expires_at")
+    was_stale_reallocation = meta.get("status") == "claimed" and lease_expired(meta, now=now)
+
+    lease_minutes = max(1, int(args.lease_minutes))
+    lease_until = now + _dt.timedelta(minutes=lease_minutes)
+
+    meta["status"] = "claimed"
+    meta["owner"] = args.owner
+    meta["allocated_to"] = args.owner
+    meta["allocated_at"] = now_utc_iso()
+    meta["lease_expires_at"] = lease_until.replace(microsecond=0).isoformat() + "Z"
+    meta["last_attempted_at"] = now_utc_iso()
+    meta["updated"] = today_str()
+    meta["score"] = float(score)
+    meta["branch"] = args.branch.strip() if args.branch else _default_branch(meta)
+
+    ticket.meta = meta
+    write_ticket(ticket)
+
+    if was_stale_reallocation:
+        append_incident(
+            repo,
+            f"stale-lease-reallocation id={tid} from_owner={previous_owner} to_owner={args.owner} prior_lease_expires_at={previous_lease}",
+        )
+
+    if args.json:
+        print(json.dumps({
+            "ticket_id": tid,
+            "owner": args.owner,
+            "branch": meta["branch"],
+            "lease_expires_at": meta["lease_expires_at"],
+            "score": score,
+        }))
+    else:
+        print(tid)
+    return 0
+
+def cmd_fail_task(args: argparse.Namespace) -> int:
+    repo = find_repo_root()
+    t = find_ticket_by_id(repo, args.id)
+    meta = normalize_meta(t.meta)
+
+    if meta.get("status") != "claimed" and not args.force:
+        eprint(f"Refusing to fail task: status is {meta.get('status')!r} (expected 'claimed'). Use --force to override.")
+        return 2
+
+    retry_count = int(meta.get("retry_count") or 0) + 1
+    retry_limit_raw = args.retry_limit if args.retry_limit is not None else meta.get("retry_limit")
+    retry_limit = int(retry_limit_raw or 3)
+    retry_limit = max(1, retry_limit)
+
+    meta["retry_count"] = retry_count
+    meta["retry_limit"] = retry_limit
+    meta["last_error"] = args.error.strip()
+    meta["last_attempted_at"] = now_utc_iso()
+    meta["updated"] = today_str()
+
+    exhausted = retry_count >= retry_limit
+    if exhausted:
+        meta["status"] = "blocked"
+        meta["owner"] = None
+        meta["branch"] = None
+        meta["allocated_to"] = None
+        meta["allocated_at"] = None
+        meta["lease_expires_at"] = None
+        t.meta = meta
+
+        target_dir = errors_dir(repo)
+        os.makedirs(target_dir, exist_ok=True)
+        dst = os.path.join(target_dir, os.path.basename(t.path))
+        if os.path.exists(dst):
+            eprint(f"Refusing to move to errors: destination already exists: {dst}")
+            return 2
+        write_ticket(t)
+        shutil.move(t.path, dst)
+        append_incident(repo, f"retry-limit-exhausted id={args.id} retries={retry_count} moved_to=tickets/errors")
+        print(f"{args.id} exceeded retry_limit ({retry_limit}) -> moved to tickets/errors/{args.id}.md")
+        return 0
+
+    meta["status"] = "ready"
+    meta["owner"] = None
+    meta["branch"] = None
+    meta["allocated_to"] = None
+    meta["allocated_at"] = None
+    meta["lease_expires_at"] = None
+    t.meta = meta
+    t.body = append_progress_log(t.body, f"attempt failed (retry {retry_count}/{retry_limit}): {args.error.strip()}")
+    write_ticket(t)
+    print(f"{args.id} re-queued for retry ({retry_count}/{retry_limit})")
+    return 0
+
 def ticket_bucket(repo: str, path: str) -> str:
     rel = os.path.relpath(path, repo)
     if rel.startswith("tickets/archive/"):
         return "archive"
+    if rel.startswith("tickets/errors/"):
+        return "errors"
     if rel.startswith("tickets/backlogs/"):
         return "backlogs"
     if rel.startswith("tickets/"):
@@ -1284,11 +1564,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_pick.add_argument("--avoid-label", action="append", default=[], help="Avoid label (repeatable)")
     p_pick.add_argument("--priority", choices=DEFAULT_PRIORITIES, help="Filter by priority")
     p_pick.add_argument("--type", choices=DEFAULT_TYPES, help="Filter by type")
+    p_pick.add_argument("--skill", choices=sorted(SKILL_PICK_PROFILES.keys()), help="Skill profile (adds label/type filters)")
+    p_pick.add_argument("--role", choices=sorted(ROLE_PICK_PROFILES.keys()), help="Role profile (adds label/type filters)")
     p_pick.add_argument("--branch", default="", help="Branch name to write into ticket")
     p_pick.add_argument("--ignore-deps", action="store_true", help="Ignore dependency gating")
     p_pick.add_argument("--max-claimed-per-owner", type=int, default=2)
     p_pick.add_argument("--json", action="store_true", help="Emit JSON result")
     p_pick.set_defaults(func=cmd_pick)
+
+    p_alloc = sub.add_parser("allocate-task", help="Queue-style allocator with lease semantics (returns ticket id).")
+    p_alloc.add_argument("--owner", required=True, help="Owner / agent id")
+    p_alloc.add_argument("--label", action="append", default=[], help="Required label (repeatable, ANDed)")
+    p_alloc.add_argument("--avoid-label", action="append", default=[], help="Avoid label (repeatable)")
+    p_alloc.add_argument("--priority", choices=DEFAULT_PRIORITIES, help="Filter by priority")
+    p_alloc.add_argument("--type", choices=DEFAULT_TYPES, help="Filter by type")
+    p_alloc.add_argument("--skill", choices=sorted(SKILL_PICK_PROFILES.keys()), help="Skill profile (adds label/type filters)")
+    p_alloc.add_argument("--role", choices=sorted(ROLE_PICK_PROFILES.keys()), help="Role profile (adds label/type filters)")
+    p_alloc.add_argument("--lease-minutes", type=int, default=5, help="Lease validity in minutes (default: 5)")
+    p_alloc.add_argument("--branch", default="", help="Branch name to write into ticket")
+    p_alloc.add_argument("--ignore-deps", action="store_true", help="Ignore dependency gating")
+    p_alloc.add_argument("--max-claimed-per-owner", type=int, default=2)
+    p_alloc.add_argument("--json", action="store_true", help="Emit JSON result")
+    p_alloc.set_defaults(func=cmd_allocate_task)
+
+    p_fail = sub.add_parser("fail-task", help="Record failed attempt, increment retry counter, and re-queue or escalate to errors.")
+    p_fail.add_argument("id")
+    p_fail.add_argument("--error", required=True, help="Error summary for retry incident log")
+    p_fail.add_argument("--retry-limit", type=int, default=None, help="Override retry limit for this ticket")
+    p_fail.add_argument("--force", action="store_true", help="Allow fail-task even when status is not claimed")
+    p_fail.set_defaults(func=cmd_fail_task)
 
     p_claim = sub.add_parser("claim", help="Claim a specific ticket.")
     p_claim.add_argument("id")
