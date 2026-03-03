@@ -19,6 +19,8 @@ zig build
 zig build run -- --help
 ```
 
+`zig build` defaults to `ReleaseSafe` optimization for this port. Override with `-Doptimize=Debug` when debugging.
+
 ## Cross-compilation artifacts
 
 Build release artifacts for macOS/Linux/Windows (archives + SHA256 sums):
@@ -48,7 +50,7 @@ Note: this port links against system `sqlite3` + libc, so cross-target builds re
 - Triggers:
 	- Tag push matching `zig-v*` (build + publish)
 	- Manual dispatch (`workflow_dispatch`) with optional `publish=true`
-- Build output: `ports/zig-mt/dist/*` (artifact archive + `SHA256SUMS`)
+- Build output: native release artifacts from Linux/macOS/Windows runners, aggregated into release assets with combined `SHA256SUMS`
 - Signing: CI performs keyless Sigstore signing of `SHA256SUMS` and publishes `SHA256SUMS.sig` + `SHA256SUMS.pem`.
 
 ## Conformance runner integration
@@ -59,4 +61,4 @@ MT_CMD="$(pwd)/zig-out/bin/mt-zig" ../../.venv/bin/python ../../tests/conformanc
 
 ## Next slices
 
-1. Expand release CI to publish multi-runner artifacts (Linux/macOS/Windows) once target-compatible `sqlite3` sysroots/libs are available.
+1. Add provenance/verification docs for consumers (`cosign verify-blob` example with certificate identity constraints).

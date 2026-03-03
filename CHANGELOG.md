@@ -16,6 +16,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Changed | Set Zig build default optimization to `ReleaseSafe` and expanded release CI to publish native artifacts from Linux/macOS/Windows runners with a combined checksum manifest
 - 2026-03-03 | Added | Added GitHub Actions Zig release workflow for native artifact publishing on `zig-v*` tags with keyless Sigstore signing of `SHA256SUMS`
 - 2026-03-03 | Added | Added Zig cross-compilation release script producing macOS/Linux/Windows archives and `SHA256SUMS` under `ports/zig-mt/dist`, with per-target failure reporting when sysroots/libs are unavailable
 - 2026-03-03 | Changed | Added Zig `new` template-ingestion parity so `tickets/ticket.template` defaults/body are applied when CLI overrides are absent (including labels/tags/depends/status/owner/branch)

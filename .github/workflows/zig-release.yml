@@ -18,7 +18,11 @@ permissions:
 
 jobs:
   build-native:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,12 +34,13 @@ jobs:
 
       - name: Build native release artifacts
         working-directory: ports/zig-mt
+        shell: bash
         run: ./scripts/release.sh --targets native --optimize ReleaseSafe
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: zig-native-dist
+          name: zig-native-dist-${{ matrix.os }}
           path: ports/zig-mt/dist/*
           if-no-files-found: error
 
@@ -47,8 +52,17 @@ jobs:
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
-          name: zig-native-dist
+          pattern: zig-native-dist-*
           path: dist
+          merge-multiple: true
+
+      - name: Rebuild combined SHA256SUMS
+        run: |
+          rm -f dist/SHA256SUMS
+          shopt -s nullglob
+          for artifact in dist/*.tar.gz dist/*.zip; do
+            shasum -a 256 "$artifact" >> dist/SHA256SUMS
+          done
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3

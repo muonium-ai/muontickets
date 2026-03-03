@@ -20,6 +20,8 @@ Build release artifacts for mt-zig across common targets.
 Usage:
   scripts/release.sh [--targets target1,target2,...] [--optimize ReleaseSafe|ReleaseFast|ReleaseSmall]
 
+Default optimize mode is ReleaseSafe.
+
 Examples:
   scripts/release.sh
   scripts/release.sh --targets aarch64-macos,x86_64-linux
@@ -54,9 +56,28 @@ while [[ $# -gt 0 ]]; do
 done
 
 mkdir -p "$DIST_DIR"
+rm -rf "$DIST_DIR"/mt-zig-* "$DIST_DIR"/mt-zig-*.tar.gz "$DIST_DIR"/mt-zig-*.zip "$DIST_DIR"/SHA256SUMS
 
 SUCCESS=()
 FAILED=()
+
+native_label() {
+  local os arch
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m | tr '[:upper:]' '[:lower:]')"
+
+  case "$os" in
+    darwin) os="macos" ;;
+    mingw*|msys*|cygwin*) os="windows" ;;
+  esac
+
+  case "$arch" in
+    arm64) arch="aarch64" ;;
+    amd64) arch="x86_64" ;;
+  esac
+
+  echo "${arch}-${os}"
+}
 
 for target in "${TARGETS[@]}"; do
   echo "==> Building $target ($OPTIMIZE)"
@@ -86,7 +107,12 @@ for target in "${TARGETS[@]}"; do
     exit 1
   fi
 
-  pkg_name="mt-zig-${target}"
+  pkg_target="$target"
+  if [[ "$target" == "native" ]]; then
+    pkg_target="$(native_label)"
+  fi
+
+  pkg_name="mt-zig-${pkg_target}"
   pkg_dir="$DIST_DIR/$pkg_name"
   rm -rf "$pkg_dir"
   mkdir -p "$pkg_dir"
