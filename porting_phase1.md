@@ -8,26 +8,26 @@ This plan operationalizes the PRD in [porting.md](porting.md).
 
 ## Scope and Sequencing
 
-### Stream A — Planning & Gate Definition (T-000007)
+### Stream A — Planning & Gate Definition
 
 - Define milestone boundaries and ownership model.
 - Define parity gates and release blockers.
 - Freeze language decision criteria and target choice.
 - Publish delivery checklist and signoff workflow.
 
-### Stream B — Conformance Harness (T-000008)
+### Stream B — Conformance Harness
 
 - Build black-box fixtures and expected outcomes from Python reference.
 - Implement reusable runner to execute fixture commands against candidates.
 - Establish baseline artifact snapshots and pass/fail report format.
 
-### Stream C — First CLI Port (T-000009)
+### Stream C — First CLI Port
 
 - Implement command parity for high-priority workflows.
 - Ensure ticket file format compatibility with no migrations.
 - Run full conformance suite and close parity gaps.
 
-### Stream D — Packaging Pipeline (T-000010)
+### Stream D — Packaging Pipeline
 
 - Produce cross-platform release binaries from tags.
 - Add install paths (package manager + direct binary).
@@ -37,7 +37,7 @@ This plan operationalizes the PRD in [porting.md](porting.md).
 
 ### M1 — Phase 1 Plan Frozen
 
-- Ticket: `T-000007`
+- Stream: Planning & Gate Definition
 - Exit criteria:
   - Sequenced stream plan approved.
   - Gate checklist approved.
@@ -45,7 +45,7 @@ This plan operationalizes the PRD in [porting.md](porting.md).
 
 ### M2 — Conformance Baseline Published
 
-- Ticket: `T-000008`
+- Stream: Conformance Baseline
 - Exit criteria:
   - Fixture repos created.
   - Baseline outputs generated from Python reference.
@@ -53,7 +53,7 @@ This plan operationalizes the PRD in [porting.md](porting.md).
 
 ### M3 — CLI Port Parity Candidate
 
-- Ticket: `T-000009`
+- Stream: CLI Port Parity
 - Exit criteria:
   - Required command set implemented.
   - Fixture suite green on mandatory scenarios.
@@ -61,7 +61,7 @@ This plan operationalizes the PRD in [porting.md](porting.md).
 
 ### M4 — Packaging Readiness
 
-- Ticket: `T-000010`
+- Stream: Packaging Readiness
 - Exit criteria:
   - macOS/Linux/Windows binaries generated.
   - Install instructions published and smoke-tested.
@@ -129,21 +129,21 @@ Evaluate on:
 
 ### Per-stream deliverables
 
-- Design/update notes attached to ticket.
+- Design/update notes attached to the workstream artifact.
 - Command examples and usage docs updated.
 - Tests/conformance evidence attached.
-- Changelog entry included with ticket reference.
+- Changelog entry included with a clear summary.
 
 ### Signoff criteria
 
-- Ticket acceptance criteria fully checked.
+- Stream acceptance criteria fully checked.
 - `mt validate` passes on working board.
 - No unresolved dependency blockers.
 - Reviewer confirms parity gate evidence where applicable.
 
-## Dependencies (Ticket-Level)
+## Dependencies (Stream-Level)
 
-- `T-000007 -> T-000008 -> T-000009 -> T-000010`
+- Planning & Gate Definition -> Conformance Harness -> First CLI Port -> Packaging Pipeline
 
 ## Risks and Controls
 

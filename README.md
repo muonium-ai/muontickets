@@ -145,6 +145,6 @@ By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data
 ## Changelog Process
 
 - User-visible changes must include an entry in `CHANGELOG.md`.
-- Use this format per entry: `YYYY-MM-DD | Type | Summary | Ticket: T-000123`.
-- Ticket reference is required for traceability from feature/fix to planning artifact.
+- Use this format per entry: `YYYY-MM-DD | Type | Summary`.
+- Keep entries descriptive enough to trace feature/fix intent without internal ticket IDs.
 - Add changelog updates in the same PR/commit as the code/docs change.
