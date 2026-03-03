@@ -4,6 +4,7 @@ import shutil
 import os
 import tempfile
 import textwrap
+import json
 from pathlib import Path
 
 
@@ -218,7 +219,7 @@ class ConformanceRunnerTests(unittest.TestCase):
                 title: Template: replace title
                 status: blocked
                 priority: p0
-                type: research
+                type: docs
                 effort: l
                 labels: [alpha, beta]
                 tags: [zig, template]
@@ -247,7 +248,7 @@ class ConformanceRunnerTests(unittest.TestCase):
 
             self.assertIn("status: blocked", text)
             self.assertIn("priority: p0", text)
-            self.assertIn("type: research", text)
+            self.assertIn("type: docs", text)
             self.assertIn("effort: l", text)
             self.assertIn("labels: [\"alpha\", \"beta\"]", text)
             self.assertIn("tags: [\"zig\", \"template\"]", text)
@@ -255,6 +256,82 @@ class ConformanceRunnerTests(unittest.TestCase):
             self.assertIn("depends_on: [\"T-000123\"]", text)
             self.assertIn("branch: feat/template-defaults", text)
             self.assertIn("Template goal body.", text)
+
+    def test_zig_ls_show_invalid_and_validate_parse_error(self) -> None:
+        zig_bin = self.get_zig_bin()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+            subprocess.run([zig_bin, "init"], cwd=str(root), check=True, capture_output=True, text=True)
+
+            bad_ticket = root / "tickets" / "T-999999.md"
+            bad_ticket.write_text("id: T-999999\ntitle: bad\n", encoding="utf-8")
+
+            shown = subprocess.run([zig_bin, "ls", "--show-invalid"], cwd=str(root), check=True, capture_output=True, text=True)
+            out = shown.stdout + shown.stderr
+            self.assertIn("T-999999.md", out)
+            self.assertIn("PARSE_ERROR", out)
+
+            validated = subprocess.run([zig_bin, "validate"], cwd=str(root), capture_output=True, text=True)
+            self.assertEqual(validated.returncode, 1, msg=f"stdout:\n{validated.stdout}\nstderr:\n{validated.stderr}")
+            vout = validated.stdout + validated.stderr
+            self.assertIn("Missing YAML frontmatter", vout)
+
+    def test_zig_export_payload_shape(self) -> None:
+        zig_bin = self.get_zig_bin()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+            subprocess.run([zig_bin, "init"], cwd=str(root), check=True, capture_output=True, text=True)
+            subprocess.run(
+                [
+                    zig_bin,
+                    "new",
+                    "Payload Ticket",
+                    "--label",
+                    "alpha",
+                    "--tag",
+                    "beta",
+                    "--depends-on",
+                    "T-000001",
+                ],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            exported = subprocess.run([zig_bin, "export", "--format", "json"], cwd=str(root), check=True, capture_output=True, text=True)
+            payload_text = (exported.stdout + exported.stderr).strip()
+            rows = json.loads(payload_text)
+            row = next(r for r in rows if r.get("id") == "T-000002")
+            for key in ["labels", "tags", "owner", "created", "updated", "depends_on", "branch", "excerpt", "path"]:
+                self.assertIn(key, row)
+            self.assertEqual(row["labels"], ["alpha"])
+            self.assertEqual(row["tags"], ["beta"])
+            self.assertEqual(row["depends_on"], ["T-000001"])
+            self.assertEqual(row["path"], "tickets/T-000002.md")
+
+    def test_zig_validate_updated_before_created(self) -> None:
+        zig_bin = self.get_zig_bin()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+            subprocess.run([zig_bin, "init"], cwd=str(root), check=True, capture_output=True, text=True)
+
+            t1 = root / "tickets" / "T-000001.md"
+            text = t1.read_text(encoding="utf-8")
+            text = text.replace("created: 1970-01-01", "created: 1970-01-02")
+            text = text.replace("updated: 1970-01-01", "updated: 1970-01-01")
+            t1.write_text(text, encoding="utf-8")
+
+            validated = subprocess.run([zig_bin, "validate"], cwd=str(root), capture_output=True, text=True)
+            self.assertEqual(validated.returncode, 1, msg=f"stdout:\n{validated.stdout}\nstderr:\n{validated.stderr}")
+            vout = validated.stdout + validated.stderr
+            self.assertIn("updated (1970-01-01) is earlier than created (1970-01-02)", vout)
 
 
 if __name__ == "__main__":

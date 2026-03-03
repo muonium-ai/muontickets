@@ -72,8 +72,8 @@ fn printHelp() void {
 
 const statuses = [_][]const u8{ "ready", "claimed", "blocked", "needs_review", "done" };
 const efforts = [_][]const u8{ "xs", "s", "m", "l" };
-const priorities = [_][]const u8{ "p0", "p1", "p2", "p3" };
-const ticket_types = [_][]const u8{ "code", "doc", "test", "research", "ops", "chore" };
+const priorities = [_][]const u8{ "p0", "p1", "p2" };
+const ticket_types = [_][]const u8{ "spec", "code", "tests", "docs", "refactor", "chore" };
 
 const default_template =
     \\\---
@@ -318,7 +318,7 @@ fn cmdInit(allocator: std.mem.Allocator) !void {
 
 fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     if (cmd_args.len < 1) {
-        std.debug.print("usage: mt-zig new <title> [--priority <p0|p1|p2|p3>] [--type <code|doc|test|research|ops|chore>] [--effort <xs|s|m|l>] [--label <label>]... [--tag <tag>]... [--depends-on <T-xxxxxx>]... [--goal <text>]\n", .{});
+        std.debug.print("usage: mt-zig new <title> [--priority <p0|p1|p2>] [--type <spec|code|tests|docs|refactor|chore>] [--effort <xs|s|m|l>] [--label <label>]... [--tag <tag>]... [--depends-on <T-xxxxxx>]... [--goal <text>]\n", .{});
         std.process.exit(2);
     }
 
@@ -611,6 +611,83 @@ fn parseMetaField(content: []const u8, key: []const u8) ?[]const u8 {
         return std.mem.trim(u8, trimmed[key.len + 1 ..], " \t\r");
     }
     return null;
+}
+
+fn frontmatterParseError(content: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    const first = lines.next() orelse return "Missing YAML frontmatter. Expected first line to be '---'.";
+    if (!std.mem.eql(u8, std.mem.trim(u8, first, " \t\r"), "---")) {
+        return "Missing YAML frontmatter. Expected first line to be '---'.";
+    }
+    while (lines.next()) |line| {
+        if (std.mem.eql(u8, std.mem.trim(u8, line, " \t\r"), "---")) {
+            return null;
+        }
+    }
+    return "Unterminated YAML frontmatter. Missing closing '---'.";
+}
+
+fn metaFieldRequired(content: []const u8, key: []const u8) bool {
+    return parseMetaField(content, key) != null;
+}
+
+fn isNullOrNonEmpty(v: []const u8) bool {
+    if (std.mem.eql(u8, v, "null")) return true;
+    return std.mem.trim(u8, v, " \t\r").len > 0;
+}
+
+fn looksLikeListLiteral(v: []const u8) bool {
+    const t = std.mem.trim(u8, v, " \t\r");
+    return t.len >= 2 and t[0] == '[' and t[t.len - 1] == ']';
+}
+
+fn isIsoDateString(v: []const u8) bool {
+    return parseIsoDateDays(v) != null;
+}
+
+fn bodyExcerptFirstLines(allocator: std.mem.Allocator, body: []const u8, max_lines: usize) ![]u8 {
+    const trimmed = std.mem.trim(u8, body, " \t\r\n");
+    var out = try std.ArrayList(u8).initCapacity(allocator, @min(trimmed.len, 1024));
+    errdefer out.deinit(allocator);
+
+    var it = std.mem.splitScalar(u8, trimmed, '\n');
+    var count: usize = 0;
+    while (it.next()) |line| {
+        if (count >= max_lines) break;
+        if (count > 0) try out.append(allocator, '\n');
+        try out.appendSlice(allocator, std.mem.trimRight(u8, line, " \t\r"));
+        count += 1;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn listJsonFromRaw(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    var vals = try listItems(allocator, raw);
+    defer freeListItems(allocator, &vals);
+    return try listLiteral(allocator, @as([]const []const u8, @ptrCast(vals.items)));
+}
+
+fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+    try out.append(allocator, '"');
+    for (value) |ch| {
+        switch (ch) {
+            '"' => try out.appendSlice(allocator, "\\\""),
+            '\\' => try out.appendSlice(allocator, "\\\\"),
+            '\n' => try out.appendSlice(allocator, "\\n"),
+            '\r' => try out.appendSlice(allocator, "\\r"),
+            '\t' => try out.appendSlice(allocator, "\\t"),
+            else => {
+                if (ch < 0x20) {
+                    const esc = try std.fmt.allocPrint(allocator, "\\u{X:0>4}", .{@as(u32, ch)});
+                    defer allocator.free(esc);
+                    try out.appendSlice(allocator, esc);
+                } else {
+                    try out.append(allocator, ch);
+                }
+            },
+        }
+    }
+    try out.append(allocator, '"');
 }
 
 fn parseListContains(content: []const u8, key: []const u8, target: []const u8) bool {
@@ -1116,6 +1193,12 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         const content = try std.fs.cwd().readFileAlloc(allocator, p, 1024 * 1024);
         defer allocator.free(content);
 
+        if (frontmatterParseError(content)) |fm_err| {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ entry.name, fm_err });
+            try errors.append(allocator, msg);
+            continue;
+        }
+
         const id = parseMetaField(content, "id") orelse entry.name[0..8];
         const status = parseMetaField(content, "status") orelse "";
         const owner = parseMetaField(content, "owner") orelse "";
@@ -1170,11 +1253,78 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         const content = try std.fs.cwd().readFileAlloc(allocator, p, 1024 * 1024);
         defer allocator.free(content);
 
+        if (frontmatterParseError(content)) |fm_err| {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ entry.name, fm_err });
+            try errors.append(allocator, msg);
+            continue;
+        }
+
         const id = parseMetaField(content, "id") orelse entry.name[0..8];
         const status = parseMetaField(content, "status") orelse "";
         const owner = parseMetaField(content, "owner") orelse "null";
         const branch = parseMetaField(content, "branch") orelse "null";
+        const title = parseMetaField(content, "title") orelse "";
+        const priority = parseMetaField(content, "priority") orelse "";
+        const ticket_type = parseMetaField(content, "type") orelse "";
+        const created = parseMetaField(content, "created") orelse "";
+        const updated = parseMetaField(content, "updated") orelse "";
         const effort = parseMetaField(content, "effort") orelse "s";
+
+        const required_fields = [_][]const u8{ "id", "title", "status", "priority", "type", "labels", "owner", "created", "updated", "depends_on", "branch" };
+        for (required_fields) |field| {
+            if (!metaFieldRequired(content, field)) {
+                const msg = try std.fmt.allocPrint(allocator, "{s}: missing required field '{s}'", .{ entry.name, field });
+                try errors.append(allocator, msg);
+            }
+        }
+
+        if (!isTicketId(id)) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: field 'id' does not match pattern ^T-\\d{{6}}$, got '{s}'", .{ entry.name, id });
+            try errors.append(allocator, msg);
+        }
+        if (std.mem.trim(u8, title, " \t\r").len < 3) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: field 'title' too short (min 3)", .{entry.name});
+            try errors.append(allocator, msg);
+        }
+        if (!priorityAllowed(priority)) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: field 'priority' must be one of [p0, p1, p2], got '{s}'", .{ entry.name, priority });
+            try errors.append(allocator, msg);
+        }
+        const type_ok = std.mem.eql(u8, ticket_type, "spec") or std.mem.eql(u8, ticket_type, "code") or std.mem.eql(u8, ticket_type, "tests") or std.mem.eql(u8, ticket_type, "docs") or std.mem.eql(u8, ticket_type, "refactor") or std.mem.eql(u8, ticket_type, "chore");
+        if (!type_ok) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: field 'type' must be one of [spec, code, tests, docs, refactor, chore], got '{s}'", .{ entry.name, ticket_type });
+            try errors.append(allocator, msg);
+        }
+        const labels_raw = parseMetaField(content, "labels") orelse "[]";
+        if (!looksLikeListLiteral(labels_raw)) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: field 'labels' must be an array/list", .{entry.name});
+            try errors.append(allocator, msg);
+        }
+        if (!isNullOrNonEmpty(owner)) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: field 'owner' must satisfy oneOf, got '{s}'", .{ entry.name, owner });
+            try errors.append(allocator, msg);
+        }
+        if (!isIsoDateString(created)) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: field 'created' does not match pattern ^\\d{{4}}-\\d{{2}}-\\d{{2}}$, got '{s}'", .{ entry.name, created });
+            try errors.append(allocator, msg);
+        }
+        if (!isIsoDateString(updated)) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: field 'updated' does not match pattern ^\\d{{4}}-\\d{{2}}-\\d{{2}}$, got '{s}'", .{ entry.name, updated });
+            try errors.append(allocator, msg);
+        }
+        const depends_raw = parseMetaField(content, "depends_on") orelse "[]";
+        if (!looksLikeListLiteral(depends_raw)) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: field 'depends_on' must be an array/list", .{entry.name});
+            try errors.append(allocator, msg);
+        }
+        if (!isNullOrNonEmpty(branch)) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: field 'branch' must satisfy oneOf, got '{s}'", .{ entry.name, branch });
+            try errors.append(allocator, msg);
+        }
+        if (isIsoDateString(created) and isIsoDateString(updated) and std.mem.order(u8, updated, created) == .lt) {
+            const msg = try std.fmt.allocPrint(allocator, "{s}: updated ({s}) is earlier than created ({s})", .{ entry.name, updated, created });
+            try errors.append(allocator, msg);
+        }
 
         if (!statusAllowed(status)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: invalid status {s}", .{ entry.name, status });
@@ -1529,18 +1679,81 @@ fn cmdExport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         defer allocator.free(path);
         const content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
         defer allocator.free(content);
+        if (frontmatterParseError(content) != null) continue;
         const id = parseMetaField(content, "id") orelse entry.name[0..8];
         const title = parseMetaField(content, "title") orelse "";
         const status = parseMetaField(content, "status") orelse "";
         const priority = parseMetaField(content, "priority") orelse "";
         const tp = parseMetaField(content, "type") orelse "";
         const effort = parseMetaField(content, "effort") orelse "";
+        const labels = parseMetaField(content, "labels") orelse "[]";
+        const tags = parseMetaField(content, "tags") orelse "[]";
+        const owner = parseMetaField(content, "owner") orelse "null";
+        const created = parseMetaField(content, "created") orelse "";
+        const updated = parseMetaField(content, "updated") orelse "";
+        const depends_on = parseMetaField(content, "depends_on") orelse "[]";
+        const branch = parseMetaField(content, "branch") orelse "null";
+        const body = frontmatterBody(content);
+        const excerpt = try bodyExcerptFirstLines(allocator, body, 20);
+        defer allocator.free(excerpt);
+        const rel_path = try std.fmt.allocPrint(allocator, "tickets/{s}", .{entry.name});
+        defer allocator.free(rel_path);
+        const labels_json = try listJsonFromRaw(allocator, labels);
+        defer allocator.free(labels_json);
+        const tags_json = try listJsonFromRaw(allocator, tags);
+        defer allocator.free(tags_json);
+        const depends_json = try listJsonFromRaw(allocator, depends_on);
+        defer allocator.free(depends_json);
+
+        var line = try std.ArrayList(u8).initCapacity(allocator, 512);
+        defer line.deinit(allocator);
+        try line.append(allocator, '{');
+        try line.appendSlice(allocator, "\"id\":");
+        try appendJsonString(allocator, &line, id);
+        try line.appendSlice(allocator, ",\"title\":");
+        try appendJsonString(allocator, &line, title);
+        try line.appendSlice(allocator, ",\"status\":");
+        try appendJsonString(allocator, &line, status);
+        try line.appendSlice(allocator, ",\"priority\":");
+        try appendJsonString(allocator, &line, priority);
+        try line.appendSlice(allocator, ",\"type\":");
+        try appendJsonString(allocator, &line, tp);
+        try line.appendSlice(allocator, ",\"effort\":");
+        try appendJsonString(allocator, &line, effort);
+        try line.appendSlice(allocator, ",\"labels\":");
+        try line.appendSlice(allocator, labels_json);
+        try line.appendSlice(allocator, ",\"tags\":");
+        try line.appendSlice(allocator, tags_json);
+        try line.appendSlice(allocator, ",\"owner\":");
+        if (std.mem.eql(u8, owner, "null")) {
+            try line.appendSlice(allocator, "null");
+        } else {
+            try appendJsonString(allocator, &line, owner);
+        }
+        try line.appendSlice(allocator, ",\"created\":");
+        try appendJsonString(allocator, &line, created);
+        try line.appendSlice(allocator, ",\"updated\":");
+        try appendJsonString(allocator, &line, updated);
+        try line.appendSlice(allocator, ",\"depends_on\":");
+        try line.appendSlice(allocator, depends_json);
+        try line.appendSlice(allocator, ",\"branch\":");
+        if (std.mem.eql(u8, branch, "null")) {
+            try line.appendSlice(allocator, "null");
+        } else {
+            try appendJsonString(allocator, &line, branch);
+        }
+        try line.appendSlice(allocator, ",\"excerpt\":");
+        try appendJsonString(allocator, &line, excerpt);
+        try line.appendSlice(allocator, ",\"path\":");
+        try appendJsonString(allocator, &line, rel_path);
+        try line.append(allocator, '}');
+
         if (std.mem.eql(u8, format, "json")) {
             if (!first) std.debug.print(",\n", .{});
             first = false;
-            std.debug.print("  {{\"id\":\"{s}\",\"title\":\"{s}\",\"status\":\"{s}\",\"priority\":\"{s}\",\"type\":\"{s}\",\"effort\":\"{s}\"}}", .{ id, title, status, priority, tp, effort });
+            std.debug.print("  {s}", .{line.items});
         } else {
-            std.debug.print("{{\"id\":\"{s}\",\"title\":\"{s}\",\"status\":\"{s}\",\"priority\":\"{s}\",\"type\":\"{s}\",\"effort\":\"{s}\"}}\n", .{ id, title, status, priority, tp, effort });
+            std.debug.print("{s}\n", .{line.items});
         }
     }
     if (std.mem.eql(u8, format, "json")) std.debug.print("\n]\n", .{});
@@ -1962,6 +2175,7 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         std.debug.print("invalid type: {s}\n", .{type_filter.?});
         std.process.exit(2);
     }
+    const show_invalid = hasFlag(cmd_args, "--show-invalid");
     var required_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
     defer required_labels.deinit(allocator);
     var label_i: usize = 0;
@@ -1995,6 +2209,13 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         defer allocator.free(full);
         const content = try std.fs.cwd().readFileAlloc(allocator, full, 1024 * 1024);
         defer allocator.free(content);
+
+        if (frontmatterParseError(content)) |fm_err| {
+            if (show_invalid) {
+                std.debug.print("{s}  PARSE_ERROR  {s}\n", .{ entry.name, fm_err });
+            }
+            continue;
+        }
 
         const id = parseMetaField(content, "id") orelse "?";
         const status = parseMetaField(content, "status") orelse "?";

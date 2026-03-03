@@ -29,21 +29,18 @@ Both CLIs expose the same top-level command set:
 
 ## Remaining Deltas
 
-1. **`export` payload shape is still reduced in Zig**
-   - Python includes fields such as `labels`, `tags`, `owner`, `created`, `updated`, `depends_on`, `branch`, `excerpt`, and `path`.
-   - Zig currently exports a narrower subset (`id`, `title`, `status`, `priority`, `type`, `effort`).
+None currently identified in the covered command/fixture scope.
 
-2. **`ls --show-invalid` parity is missing in Zig**
-   - Python can show parse-error rows with `--show-invalid`.
-   - Zig currently skips invalid entries silently.
+## Recently Closed
 
-3. **`validate` strictness differences remain**
-   - Python performs full schema validation and date consistency checks (`updated >= created`) and some richer semantics.
-   - Zig validate currently covers major workflow checks, archive/dependency checks, effort sanity, owner/branch sanity, and the two added policy flags.
+- **`export` payload shape parity**
+  - Zig export now includes Python-aligned fields: `labels`, `tags`, `owner`, `created`, `updated`, `depends_on`, `branch`, `excerpt`, and `path`.
 
-4. **Enum/domain differences**
-   - Python `DEFAULT_PRIORITIES` and `DEFAULT_TYPES` differ from Zig accepted sets.
-   - This is not a runtime blocker but may produce behavior drift in mixed-language environments.
+- **`ls --show-invalid` parity**
+  - Zig now supports `--show-invalid` and reports parse-error rows.
+
+- **`validate` strictness parity (major checks)**
+  - Zig now fails parse-error files, checks required fields, validates key enums/patterns, and enforces date consistency (`updated >= created`).
 
 ## Conformance Coverage
 
@@ -58,7 +55,4 @@ These now cover the recently closed option/scoring gaps.
 
 ## Recommendation
 
-For full practical parity, prioritize next:
-1. Expand Zig `export` payload to match Python schema.
-2. Add Zig `ls --show-invalid` behavior.
-3. Add deeper schema/date checks in Zig `validate`.
+Continue expanding fixtures for any newly added command options to preserve strict parity over time.
