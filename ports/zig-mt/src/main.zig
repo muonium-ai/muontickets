@@ -375,6 +375,24 @@ fn parseListContains(content: []const u8, key: []const u8, target: []const u8) b
     return false;
 }
 
+fn listItems(allocator: std.mem.Allocator, raw_list: []const u8) !std.ArrayList([]u8) {
+    var out = try std.ArrayList([]u8).initCapacity(allocator, 8);
+    const trimmed = std.mem.trim(u8, raw_list, " \t\r[]");
+    if (trimmed.len == 0) return out;
+    var it = std.mem.splitScalar(u8, trimmed, ',');
+    while (it.next()) |item| {
+        const value = std.mem.trim(u8, item, " \t\r\"'");
+        if (value.len == 0) continue;
+        try out.append(allocator, try allocator.dupe(u8, value));
+    }
+    return out;
+}
+
+fn freeListItems(allocator: std.mem.Allocator, items: *std.ArrayList([]u8)) void {
+    for (items.items) |v| allocator.free(v);
+    items.deinit(allocator);
+}
+
 fn setMetaField(allocator: std.mem.Allocator, content: []const u8, key: []const u8, value: []const u8) ![]u8 {
     var out = try std.ArrayList(u8).initCapacity(allocator, content.len + 64);
     errdefer out.deinit(allocator);
@@ -505,6 +523,16 @@ fn depDone(repo: []const u8, allocator: std.mem.Allocator, dep_id: []const u8) b
     defer allocator.free(content);
     const st = parseMetaField(content, "status") orelse return false;
     return std.mem.eql(u8, st, "done");
+}
+
+fn depsSatisfied(repo: []const u8, allocator: std.mem.Allocator, content: []const u8) bool {
+    const deps_raw = parseMetaField(content, "depends_on") orelse "[]";
+    var deps = listItems(allocator, deps_raw) catch return false;
+    defer freeListItems(allocator, &deps);
+    for (deps.items) |dep| {
+        if (!depDone(repo, allocator, dep)) return false;
+    }
+    return true;
 }
 
 fn cmdClaim(allocator: std.mem.Allocator, id: []const u8, owner: []const u8, force: bool, ignore_deps: bool) !void {
@@ -778,6 +806,176 @@ fn cmdValidate(allocator: std.mem.Allocator) !void {
     std.debug.print("MuonTickets validation OK.\n", .{});
 }
 
+fn cmdComment(allocator: std.mem.Allocator, id: []const u8, text: []const u8) !void {
+    if (!isTicketId(id)) {
+        std.debug.print("invalid ticket id: {s}\n", .{id});
+        std.process.exit(2);
+    }
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const path = try ticketPath(allocator, repo, id);
+    defer allocator.free(path);
+    const content = std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024) catch {
+        std.debug.print("ticket not found: {s}\n", .{id});
+        std.process.exit(2);
+    };
+    defer allocator.free(content);
+
+    var out = try std.ArrayList(u8).initCapacity(allocator, content.len + text.len + 128);
+    defer out.deinit(allocator);
+    try out.appendSlice(allocator, content);
+    if (!std.mem.containsAtLeast(u8, content, 1, "## Progress Log")) {
+        if (!std.mem.endsWith(u8, content, "\n")) try out.append(allocator, '\n');
+        try out.appendSlice(allocator, "\n## Progress Log\n");
+    }
+    try out.appendSlice(allocator, "- 1970-01-01: ");
+    try out.appendSlice(allocator, text);
+    try out.append(allocator, '\n');
+
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = out.items });
+    std.debug.print("commented on {s}\n", .{id});
+}
+
+fn cmdPick(allocator: std.mem.Allocator, owner: []const u8) !void {
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
+    defer allocator.free(tdir);
+    if (!dirExists(tdir)) {
+        std.debug.print("no claimable tickets found (ready + deps satisfied + filters).\n", .{});
+        std.process.exit(3);
+    }
+
+    var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
+    defer dir.close();
+    var it = dir.iterate();
+
+    while (try it.next()) |entry| {
+        if (entry.kind != .file or !isTicketFilename(entry.name)) continue;
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ tdir, entry.name });
+        defer allocator.free(path);
+        const content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+        defer allocator.free(content);
+        const status = parseMetaField(content, "status") orelse "";
+        if (!std.mem.eql(u8, status, "ready")) continue;
+        if (!depsSatisfied(repo, allocator, content)) continue;
+
+        const id = parseMetaField(content, "id") orelse entry.name[0..8];
+        const title = parseMetaField(content, "title") orelse "task";
+        const branch = try defaultBranch(allocator, id, title);
+        defer allocator.free(branch);
+
+        const next = try setMetaField(allocator, content, "status", "claimed");
+        defer allocator.free(next);
+        const next2 = try setMetaField(allocator, next, "owner", owner);
+        defer allocator.free(next2);
+        const next3 = try setMetaField(allocator, next2, "branch", branch);
+        defer allocator.free(next3);
+        try std.fs.cwd().writeFile(.{ .sub_path = path, .data = next3 });
+        std.debug.print("picked {s} (score 0.0) -> claimed as {s} (branch: {s})\n", .{ id, owner, branch });
+        return;
+    }
+
+    std.debug.print("no claimable tickets found (ready + deps satisfied + filters).\n", .{});
+    std.process.exit(3);
+}
+
+fn cmdGraph(allocator: std.mem.Allocator) !void {
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
+    defer allocator.free(tdir);
+    if (!dirExists(tdir)) return;
+
+    var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
+    defer dir.close();
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file or !isTicketFilename(entry.name)) continue;
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ tdir, entry.name });
+        defer allocator.free(path);
+        const content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+        defer allocator.free(content);
+        const id = parseMetaField(content, "id") orelse entry.name[0..8];
+        const deps_raw = parseMetaField(content, "depends_on") orelse "[]";
+        var deps = try listItems(allocator, deps_raw);
+        defer freeListItems(allocator, &deps);
+        for (deps.items) |dep| {
+            std.debug.print("{s} -> {s}\n", .{ dep, id });
+        }
+    }
+}
+
+fn cmdExport(allocator: std.mem.Allocator) !void {
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
+    defer allocator.free(tdir);
+    if (!dirExists(tdir)) {
+        std.debug.print("[]\n", .{});
+        return;
+    }
+
+    std.debug.print("[\n", .{});
+    var first = true;
+    var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
+    defer dir.close();
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file or !isTicketFilename(entry.name)) continue;
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ tdir, entry.name });
+        defer allocator.free(path);
+        const content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+        defer allocator.free(content);
+        const id = parseMetaField(content, "id") orelse entry.name[0..8];
+        const title = parseMetaField(content, "title") orelse "";
+        const status = parseMetaField(content, "status") orelse "";
+        const priority = parseMetaField(content, "priority") orelse "";
+        const tp = parseMetaField(content, "type") orelse "";
+        const effort = parseMetaField(content, "effort") orelse "";
+        if (!first) std.debug.print(",\n", .{});
+        first = false;
+        std.debug.print("  {{\"id\":\"{s}\",\"title\":\"{s}\",\"status\":\"{s}\",\"priority\":\"{s}\",\"type\":\"{s}\",\"effort\":\"{s}\"}}", .{ id, title, status, priority, tp, effort });
+    }
+    std.debug.print("\n]\n", .{});
+}
+
+fn cmdStats(allocator: std.mem.Allocator) !void {
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
+    defer allocator.free(tdir);
+    var ready: u32 = 0;
+    var claimed: u32 = 0;
+    var blocked: u32 = 0;
+    var needs_review: u32 = 0;
+    var done: u32 = 0;
+    if (dirExists(tdir)) {
+        var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
+        defer dir.close();
+        var it = dir.iterate();
+        while (try it.next()) |entry| {
+            if (entry.kind != .file or !isTicketFilename(entry.name)) continue;
+            const path = try std.fs.path.join(allocator, &[_][]const u8{ tdir, entry.name });
+            defer allocator.free(path);
+            const content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+            defer allocator.free(content);
+            const st = parseMetaField(content, "status") orelse "";
+            if (std.mem.eql(u8, st, "ready")) ready += 1;
+            if (std.mem.eql(u8, st, "claimed")) claimed += 1;
+            if (std.mem.eql(u8, st, "blocked")) blocked += 1;
+            if (std.mem.eql(u8, st, "needs_review")) needs_review += 1;
+            if (std.mem.eql(u8, st, "done")) done += 1;
+        }
+    }
+    std.debug.print("Status counts:\n", .{});
+    std.debug.print("  ready        {d}\n", .{ready});
+    std.debug.print("  claimed      {d}\n", .{claimed});
+    std.debug.print("  blocked      {d}\n", .{blocked});
+    std.debug.print("  needs_review {d}\n", .{needs_review});
+    std.debug.print("  done         {d}\n", .{done});
+}
+
 fn cmdLs(allocator: std.mem.Allocator) !void {
     const repo = try findRepoRoot(allocator);
     defer allocator.free(repo);
@@ -873,7 +1071,13 @@ pub fn main() !void {
             }
             try cmdShow(allocator, args[2]);
         },
-        .pick => std.debug.print("TODO: pick (zig port)\n", .{}),
+        .pick => {
+            const owner = getOptValue(args[2..], "--owner") orelse {
+                std.debug.print("pick requires --owner <owner>\n", .{});
+                std.process.exit(2);
+            };
+            try cmdPick(allocator, owner);
+        },
         .claim => {
             if (args.len < 4) {
                 std.debug.print("usage: mt-zig claim <id> --owner <owner> [--force] [--ignore-deps]\n", .{});
@@ -885,7 +1089,13 @@ pub fn main() !void {
             };
             try cmdClaim(allocator, args[2], owner, hasFlag(args[3..], "--force"), hasFlag(args[3..], "--ignore-deps"));
         },
-        .comment => std.debug.print("TODO: comment (zig port)\n", .{}),
+        .comment => {
+            if (args.len < 4) {
+                std.debug.print("usage: mt-zig comment <id> <text>\n", .{});
+                std.process.exit(2);
+            }
+            try cmdComment(allocator, args[2], args[3]);
+        },
         .set_status => {
             if (args.len < 4) {
                 std.debug.print("usage: mt-zig set-status <id> <status> [--force]\n", .{});
@@ -907,9 +1117,9 @@ pub fn main() !void {
             }
             try cmdArchive(allocator, args[2], hasFlag(args[3..], "--force"));
         },
-        .graph => std.debug.print("TODO: graph (zig port)\n", .{}),
-        .@"export" => std.debug.print("TODO: export (zig port)\n", .{}),
-        .stats => std.debug.print("TODO: stats (zig port)\n", .{}),
+        .graph => try cmdGraph(allocator),
+        .@"export" => try cmdExport(allocator),
+        .stats => try cmdStats(allocator),
         .validate => try cmdValidate(allocator),
         .report => std.debug.print("TODO: report (zig port)\n", .{}),
     }
