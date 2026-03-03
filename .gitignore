@@ -87,6 +87,10 @@ docs/_build/
 .pybuilder/
 target/
 
+# Zig build outputs
+.zig-cache/
+zig-out/
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
