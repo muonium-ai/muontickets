@@ -18,9 +18,9 @@ Example:
 
 - 2026-03-03 | Added | Bootstrapped initial Rust `mt` port scaffold under `ports/rust-mt` with mapped command surface and buildable CLI entrypoint
 - 2026-03-03 | Added | Added cross-language conformance fixtures and reusable runner for validating command parity against Python reference behavior
-- 2026-03-03 | Docs | Added `porting_phase1.md` with milestone sequencing, parity gates, owner model, and delivery signoff checklist for portability execution
+- 2026-03-03 | Docs | Added `ports/porting_phase1.md` with milestone sequencing, parity gates, owner model, and delivery signoff checklist for portability execution
 - 2026-03-03 | Docs | Recommended one ticket fix per commit/PR and parallel multi-agent execution for isolated tickets
-- 2026-03-03 | Docs | Added root-level `porting.md` PRD covering full `mt.py` feature parity, file-based model rationale, and system-wide porting guidance with Zig/C/Rust recommendations
+- 2026-03-03 | Docs | Added `ports/porting.md` PRD covering full `mt.py` feature parity, file-based model rationale, and system-wide porting guidance with Zig/C/Rust recommendations
 - 2026-03-03 | Docs | Standardized submodule command path to `tickets/mt/muontickets/muontickets/mt.py` and added explicit wrong-vs-right install/run examples for agents
 - 2026-03-03 | Docs | Added explicit CLI-first guidance to use `mt.py` for claim/status/comment/archive flows and avoid direct edits under `tickets/`
 - 2026-03-03 | Docs | Expanded `ticket.template` guidance with customization, inheritance examples, and `mt init` non-overwrite behavior
