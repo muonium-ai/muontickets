@@ -770,9 +770,17 @@ def cmd_archive(args: argparse.Namespace) -> int:
         dep_list = ", ".join(sorted(dependents))
         eprint(
             "Refusing to archive: active tickets depend on this ticket: "
-            f"{dep_list}. Update/remove depends_on or use --force."
+            f"{dep_list}. Resolve/update their depends_on first. "
+            "Warning: using --force can leave invalid active references to archived tickets."
         )
         return 2
+
+    if dependents and args.force:
+        dep_list = ", ".join(sorted(dependents))
+        eprint(
+            "Warning: force-archiving with active dependents: "
+            f"{dep_list}. This can create invalid board state where active tickets depend_on archived tickets."
+        )
 
     target_dir = archive_dir(repo)
     os.makedirs(target_dir, exist_ok=True)
@@ -823,7 +831,10 @@ def validate_depends(tickets: List[Ticket], archived_ids: Optional[set[str]] = N
         for dep in meta.get("depends_on") or []:
             if dep not in existing:
                 if dep in archived:
-                    errs.append(f"{tid} depends_on archived ticket {dep}")
+                    errs.append(
+                        f"{tid} depends_on archived ticket {dep} "
+                        f"(fix by unarchiving {dep} or removing/updating {tid}.depends_on; avoid mt archive --force when active dependents exist)"
+                    )
                 else:
                     errs.append(f"{tid} depends_on missing ticket {dep}")
     return errs
