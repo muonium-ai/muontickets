@@ -98,6 +98,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    FailTask {
+        id: String,
+        #[arg(long)]
+        error: String,
+        #[arg(long = "retry-limit")]
+        retry_limit: Option<i64>,
+        #[arg(long)]
+        force: bool,
+    },
     Claim {
         id: String,
         #[arg(long)]
@@ -214,6 +223,10 @@ fn tickets_dir(repo_root: &Path) -> PathBuf {
 
 fn archive_dir(repo_root: &Path) -> PathBuf {
     repo_root.join("tickets").join("archive")
+}
+
+fn errors_dir(repo_root: &Path) -> PathBuf {
+    repo_root.join("tickets").join("errors")
 }
 
 fn incidents_log_path(repo_root: &Path) -> PathBuf {
@@ -432,6 +445,7 @@ fn all_ticket_paths(repo_root: &Path) -> Result<Vec<PathBuf>> {
     iter_ticket_files_recursive(&tickets_dir(repo_root), &mut paths)?;
     iter_ticket_files_recursive(&archive_dir(repo_root), &mut paths)?;
     iter_ticket_files_recursive(&backlogs_dir(repo_root), &mut paths)?;
+    iter_ticket_files_recursive(&errors_dir(repo_root), &mut paths)?;
     let mut dedupe = BTreeSet::new();
     for p in paths {
         dedupe.insert(p);
@@ -510,6 +524,14 @@ fn map_get_string(meta: &Mapping, key: &str) -> Option<String> {
     meta.get(Value::String(key.to_string()))
         .and_then(Value::as_str)
         .map(ToString::to_string)
+}
+
+fn map_get_i64(meta: &Mapping, key: &str) -> Option<i64> {
+    match meta.get(Value::String(key.to_string())) {
+        Some(Value::Number(number)) => number.as_i64(),
+        Some(Value::String(text)) => text.trim().parse::<i64>().ok(),
+        _ => None,
+    }
 }
 
 fn map_get_string_array(meta: &Mapping, key: &str) -> Vec<String> {
@@ -1622,6 +1644,100 @@ fn cmd_allocate_task(
     Ok(0)
 }
 
+fn cmd_fail_task(id: String, error: String, retry_limit: Option<i64>, force: bool) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let path = find_ticket_by_id(&repo, &id)?;
+    let (mut meta, body) = read_ticket(&path)?;
+    normalize_meta(&mut meta);
+
+    let status = map_get_status(&meta);
+    if status != "claimed" && !force {
+        return Err(anyhow!(
+            "Refusing to fail task: status is {:?} (expected 'claimed'). Use --force to override.",
+            status
+        ));
+    }
+
+    let next_retry_count = map_get_i64(&meta, "retry_count").unwrap_or(0) + 1;
+    let configured_retry_limit = retry_limit
+        .or_else(|| map_get_i64(&meta, "retry_limit"))
+        .unwrap_or(3)
+        .max(1);
+
+    meta.insert(
+        Value::String("retry_count".to_string()),
+        Value::Number(serde_yaml::Number::from(next_retry_count)),
+    );
+    meta.insert(
+        Value::String("retry_limit".to_string()),
+        Value::Number(serde_yaml::Number::from(configured_retry_limit)),
+    );
+    map_set_string(&mut meta, "last_error", error.trim());
+    map_set_string(&mut meta, "last_attempted_at", &now_utc_iso());
+    map_set_string(&mut meta, "updated", &today_str());
+
+    if next_retry_count >= configured_retry_limit {
+        map_set_string(&mut meta, "status", "blocked");
+        map_set_optional_string(&mut meta, "owner", None);
+        map_set_optional_string(&mut meta, "branch", None);
+        map_set_optional_string(&mut meta, "allocated_to", None);
+        map_set_optional_string(&mut meta, "allocated_at", None);
+        map_set_optional_string(&mut meta, "lease_expires_at", None);
+
+        write_ticket(&path, &meta, &body)?;
+
+        let target_dir = errors_dir(&repo);
+        fs::create_dir_all(&target_dir)?;
+        let destination = target_dir.join(
+            path.file_name()
+                .ok_or_else(|| anyhow!("missing error-bucket filename"))?,
+        );
+        if destination.exists() {
+            return Err(anyhow!(
+                "Refusing to move to errors: destination already exists: {}",
+                destination.display()
+            ));
+        }
+        fs::rename(&path, &destination)?;
+        append_incident(
+            &repo,
+            &format!(
+                "retry-limit-exhausted id={} retries={} moved_to=tickets/errors",
+                id, next_retry_count
+            ),
+        )?;
+        println!(
+            "{} exceeded retry_limit ({}) -> moved to tickets/errors/{}.md",
+            id, configured_retry_limit, id
+        );
+        return Ok(0);
+    }
+
+    map_set_string(&mut meta, "status", "ready");
+    map_set_optional_string(&mut meta, "owner", None);
+    map_set_optional_string(&mut meta, "branch", None);
+    map_set_optional_string(&mut meta, "allocated_to", None);
+    map_set_optional_string(&mut meta, "allocated_at", None);
+    map_set_optional_string(&mut meta, "lease_expires_at", None);
+
+    let updated_body = append_progress_log(
+        &body,
+        &format!(
+            "attempt failed (retry {}/{}): {}",
+            next_retry_count,
+            configured_retry_limit,
+            error.trim()
+        ),
+    );
+    write_ticket(&path, &meta, &updated_body)?;
+    println!(
+        "{} re-queued for retry ({}/{})",
+        id, next_retry_count, configured_retry_limit
+    );
+    Ok(0)
+}
+
 fn cmd_graph(mermaid: bool, open_only: bool) -> Result<i32> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let repo = find_repo_root(&cwd);
@@ -1750,6 +1866,8 @@ fn ticket_bucket(repo: &Path, path: &Path) -> String {
     let rel = path.strip_prefix(repo).unwrap_or(path).display().to_string();
     if rel.starts_with("tickets/archive/") {
         "archive".to_string()
+    } else if rel.starts_with("tickets/errors/") {
+        "errors".to_string()
     } else if rel.starts_with("tickets/backlogs/") {
         "backlogs".to_string()
     } else if rel.starts_with("tickets/") {
@@ -2012,6 +2130,12 @@ fn run() -> Result<i32> {
             lease_minutes,
             json,
         ),
+        Commands::FailTask {
+            id,
+            error,
+            retry_limit,
+            force,
+        } => cmd_fail_task(id, error, retry_limit, force),
         Commands::Claim {
             id,
             owner,
