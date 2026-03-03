@@ -318,7 +318,7 @@ fn cmdInit(allocator: std.mem.Allocator) !void {
 
 fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     if (cmd_args.len < 1) {
-        std.debug.print("usage: mt-zig new <title> [--priority <p0|p1|p2|p3>] [--type <code|doc|test|research|ops|chore>] [--effort <xs|s|m|l>] [--label <label>]... [--depends-on <T-xxxxxx>]... [--goal <text>]\n", .{});
+        std.debug.print("usage: mt-zig new <title> [--priority <p0|p1|p2|p3>] [--type <code|doc|test|research|ops|chore>] [--effort <xs|s|m|l>] [--label <label>]... [--tag <tag>]... [--depends-on <T-xxxxxx>]... [--goal <text>]\n", .{});
         std.process.exit(2);
     }
 
@@ -328,14 +328,22 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         std.process.exit(2);
     }
 
+    var cli_priority = false;
+    var cli_type = false;
+    var cli_effort = false;
     var priority: []const u8 = "p1";
     var ticket_type: []const u8 = "code";
     var effort: []const u8 = "s";
+    var status: []const u8 = "ready";
+    var owner: []const u8 = "null";
+    var branch: []const u8 = "null";
     var goal: []const u8 = "";
-    var labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
-    defer labels.deinit(allocator);
-    var depends_on = try std.ArrayList([]const u8).initCapacity(allocator, 4);
-    defer depends_on.deinit(allocator);
+    var labels = try std.ArrayList([]u8).initCapacity(allocator, 4);
+    defer freeListItems(allocator, &labels);
+    var tags = try std.ArrayList([]u8).initCapacity(allocator, 4);
+    defer freeListItems(allocator, &tags);
+    var depends_on = try std.ArrayList([]u8).initCapacity(allocator, 4);
+    defer freeListItems(allocator, &depends_on);
 
     var i: usize = 1;
     while (i < cmd_args.len) : (i += 1) {
@@ -346,6 +354,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.process.exit(2);
             }
             priority = cmd_args[i + 1];
+            cli_priority = true;
             i += 1;
             continue;
         }
@@ -355,6 +364,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.process.exit(2);
             }
             ticket_type = cmd_args[i + 1];
+            cli_type = true;
             i += 1;
             continue;
         }
@@ -364,6 +374,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.process.exit(2);
             }
             effort = cmd_args[i + 1];
+            cli_effort = true;
             i += 1;
             continue;
         }
@@ -372,7 +383,16 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.debug.print("--label requires a value\n", .{});
                 std.process.exit(2);
             }
-            try labels.append(allocator, cmd_args[i + 1]);
+            try labels.append(allocator, try allocator.dupe(u8, cmd_args[i + 1]));
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--tag")) {
+            if (i + 1 >= cmd_args.len) {
+                std.debug.print("--tag requires a value\n", .{});
+                std.process.exit(2);
+            }
+            try tags.append(allocator, try allocator.dupe(u8, cmd_args[i + 1]));
             i += 1;
             continue;
         }
@@ -386,7 +406,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.debug.print("invalid dependency ticket id: {s}\n", .{dep_id});
                 std.process.exit(2);
             }
-            try depends_on.append(allocator, dep_id);
+            try depends_on.append(allocator, try allocator.dupe(u8, dep_id));
             i += 1;
             continue;
         }
@@ -422,6 +442,52 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(tickets_dir);
     if (!dirExists(tickets_dir)) try std.fs.cwd().makePath(tickets_dir);
 
+    const template_path = try std.fs.path.join(allocator, &[_][]const u8{ tickets_dir, "ticket.template" });
+    defer allocator.free(template_path);
+    var template_content: ?[]u8 = null;
+    defer if (template_content) |t| allocator.free(t);
+    if (fileExists(template_path)) {
+        template_content = try std.fs.cwd().readFileAlloc(allocator, template_path, 1024 * 1024);
+    }
+
+    if (template_content) |tpl| {
+        if (!cli_priority) priority = parseMetaField(tpl, "priority") orelse priority;
+        if (!cli_type) ticket_type = parseMetaField(tpl, "type") orelse ticket_type;
+        if (!cli_effort) effort = parseMetaField(tpl, "effort") orelse effort;
+        status = parseMetaField(tpl, "status") orelse status;
+        owner = parseMetaField(tpl, "owner") orelse owner;
+        branch = parseMetaField(tpl, "branch") orelse branch;
+
+        if (labels.items.len == 0) {
+            const raw = parseMetaField(tpl, "labels") orelse "[]";
+            var vals = try listItems(allocator, raw);
+            defer freeListItems(allocator, &vals);
+            for (vals.items) |v| try labels.append(allocator, try allocator.dupe(u8, v));
+        }
+        if (tags.items.len == 0) {
+            const raw = parseMetaField(tpl, "tags") orelse "[]";
+            var vals = try listItems(allocator, raw);
+            defer freeListItems(allocator, &vals);
+            for (vals.items) |v| try tags.append(allocator, try allocator.dupe(u8, v));
+        }
+        if (depends_on.items.len == 0) {
+            const raw = parseMetaField(tpl, "depends_on") orelse "[]";
+            var vals = try listItems(allocator, raw);
+            defer freeListItems(allocator, &vals);
+            for (vals.items) |v| {
+                if (!isTicketId(v)) {
+                    std.debug.print("invalid dependency ticket id from template: {s}\n", .{v});
+                    std.process.exit(2);
+                }
+                try depends_on.append(allocator, try allocator.dupe(u8, v));
+            }
+        }
+    }
+
+    if (!statusAllowed(status)) status = "ready";
+    if (!std.mem.eql(u8, owner, "null") and owner.len == 0) owner = "null";
+    if (!std.mem.eql(u8, branch, "null") and branch.len == 0) branch = "null";
+
     const tid = try nextTicketIdForRepo(allocator, repo);
     defer allocator.free(tid);
     const fname = try std.fmt.allocPrint(allocator, "{s}.md", .{tid});
@@ -429,9 +495,11 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     const ticket_path = try std.fs.path.join(allocator, &[_][]const u8{ tickets_dir, fname });
     defer allocator.free(ticket_path);
 
-    const labels_literal = try listLiteral(allocator, labels.items);
+    const labels_literal = try listLiteral(allocator, @as([]const []const u8, @ptrCast(labels.items)));
     defer allocator.free(labels_literal);
-    const depends_literal = try listLiteral(allocator, depends_on.items);
+    const tags_literal = try listLiteral(allocator, @as([]const []const u8, @ptrCast(tags.items)));
+    defer allocator.free(tags_literal);
+    const depends_literal = try listLiteral(allocator, @as([]const []const u8, @ptrCast(depends_on.items)));
     defer allocator.free(depends_literal);
 
     const body = if (goal.len > 0)
@@ -448,6 +516,23 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         ,
             .{goal},
         )
+    else if (template_content) |tpl|
+        if (std.mem.trim(u8, frontmatterBody(tpl), " \t\r\n").len > 0)
+            try allocator.dupe(u8, frontmatterBody(tpl))
+        else
+            try std.fmt.allocPrint(
+                allocator,
+                \\## Goal
+                \\Write a single-sentence goal.
+                \\
+                \\## Acceptance Criteria
+                \\- [ ] Define clear, testable checks (2–5 items)
+                \\
+                \\## Notes
+                \\
+            ,
+                .{},
+            )
     else
         try std.fmt.allocPrint(
             allocator,
@@ -464,15 +549,47 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         );
     defer allocator.free(body);
 
-    try writeTicketFile(allocator, ticket_path, tid, title, "ready", priority, ticket_type, effort, labels_literal, body);
+    try writeTicketFile(allocator, ticket_path, tid, title, status, priority, ticket_type, effort, labels_literal, body);
 
     const written = try std.fs.cwd().readFileAlloc(allocator, ticket_path, 1024 * 1024);
     defer allocator.free(written);
     const with_depends = try setMetaField(allocator, written, "depends_on", depends_literal);
     defer allocator.free(with_depends);
-    try std.fs.cwd().writeFile(.{ .sub_path = ticket_path, .data = with_depends });
+    const with_tags = try setMetaField(allocator, with_depends, "tags", tags_literal);
+    defer allocator.free(with_tags);
+    const with_owner = try setMetaField(allocator, with_tags, "owner", owner);
+    defer allocator.free(with_owner);
+    const with_branch = try setMetaField(allocator, with_owner, "branch", branch);
+    defer allocator.free(with_branch);
+    try std.fs.cwd().writeFile(.{ .sub_path = ticket_path, .data = with_branch });
 
     std.debug.print("{s}\n", .{ticket_path});
+}
+
+fn frontmatterBody(content: []const u8) []const u8 {
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    var in_frontmatter = false;
+    var seen_first = false;
+    var offset: usize = 0;
+    while (lines.next()) |line| {
+        const line_len = line.len;
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (std.mem.eql(u8, trimmed, "---")) {
+            if (!seen_first) {
+                seen_first = true;
+                in_frontmatter = true;
+                offset += line_len + 1;
+                continue;
+            }
+            if (in_frontmatter) {
+                offset += line_len + 1;
+                if (offset > content.len) return "";
+                return content[offset..];
+            }
+        }
+        offset += line_len + 1;
+    }
+    return "";
 }
 
 fn parseMetaField(content: []const u8, key: []const u8) ?[]const u8 {
