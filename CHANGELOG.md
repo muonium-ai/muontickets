@@ -17,6 +17,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Docs | Added `porting_phase1.md` with milestone sequencing, parity gates, owner model, and delivery signoff checklist for portability execution | Ticket: T-000007
 - 2026-03-03 | Docs | Recommended one ticket fix per commit/PR and parallel multi-agent execution for isolated tickets | Ticket: T-000011
 - 2026-03-03 | Docs | Added root-level `porting.md` PRD covering full `mt.py` feature parity, file-based model rationale, and system-wide porting guidance with Zig/C/Rust recommendations | Ticket: T-000006
 - 2026-03-03 | Docs | Standardized submodule command path to `tickets/mt/muontickets/muontickets/mt.py` and added explicit wrong-vs-right install/run examples for agents | Ticket: T-000002
