@@ -107,6 +107,8 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
 Examples:
 
 ```bash
+# Edit defaults in tickets/ticket.template (for example: priority: p2, type: docs, effort: xs)
+
 # Create ticket with sequence from tickets/last_ticket_id
 uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Implement feature X"
 

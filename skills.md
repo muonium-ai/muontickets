@@ -112,3 +112,17 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py archive T-000123
 - MuonTickets supports `tickets/ticket.template` for default ticket shape.
 - `mt new` uses template defaults when present.
 - CLI arguments override template defaults for one-off needs.
+- `mt init` creates `tickets/ticket.template` only if missing; existing templates are preserved.
+
+Example customization flow:
+
+```bash
+# 1) Set project defaults in tickets/ticket.template
+#    (example: priority: p2, type: docs, effort: xs)
+
+# 2) Create ticket inheriting template defaults
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Write onboarding notes"
+
+# 3) Override defaults for one ticket only
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Hotfix auth" --priority p0 --type code --effort s
+```
