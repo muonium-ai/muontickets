@@ -16,6 +16,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Added | Added Rust native release pipeline (`rust-v*` tags) with Linux/macOS/Windows artifact publishing, checksum manifest signing (Sigstore keyless), fixture smoke checks, and release verification/install guidance
 - 2026-03-03 | Docs | Added sandbox-safe multi-agent workflow guidance (worktrees, branch-per-agent + PR integration, project-local `tmp/<agent>/`, `make clean`, and smoke-test-first validation)
 - 2026-03-03 | Docs | Added `ports/zig-mt/parity_report.md` with a current Zig-vs-Python parity status matrix and remaining deltas
 - 2026-03-03 | Changed | Implemented Python-aligned Zig `pick` scoring and tie-break behavior (priority/effort/dependency/age weighting, deterministic selection, and emitted score) with conformance coverage

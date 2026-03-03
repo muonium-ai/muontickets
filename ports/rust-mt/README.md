@@ -15,7 +15,53 @@ cd ports/rust-mt
 cargo run -- --help
 ```
 
+## Cross-compilation artifacts
+
+Build release artifacts (archives + SHA256 sums):
+
+```bash
+cd ports/rust-mt
+./scripts/release.sh --targets native
+```
+
+Optional explicit targets:
+
+```bash
+./scripts/release.sh --targets x86_64-unknown-linux-gnu,aarch64-apple-darwin
+```
+
+## CI publishing and signing
+
+- Workflow: `.github/workflows/rust-release.yml`
+- Triggers:
+	- Tag push matching `rust-v*` (build + publish)
+	- Manual dispatch (`workflow_dispatch`) with optional `publish=true`
+- Build output: native release artifacts from Linux/macOS/Windows runners, aggregated into release assets with combined `SHA256SUMS`
+- Signing: CI performs keyless Sigstore signing of `SHA256SUMS` and publishes `SHA256SUMS.sig` + `SHA256SUMS.pem`
+- Smoke validation: CI runs conformance fixture `reporting_graph_pick.json` against built binary before publish
+
+## Consumer verification
+
+Manual verification (in a release download directory):
+
+```bash
+shasum -a 256 -c SHA256SUMS
+
+cosign verify-blob \
+	--signature SHA256SUMS.sig \
+	--certificate SHA256SUMS.pem \
+	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
+	--certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/rust-release.yml@refs/(tags/rust-v.*|heads/main)$' \
+	SHA256SUMS
+```
+
+Automated helper:
+
+```bash
+cd ports/rust-mt
+./scripts/verify-release.sh --dist dist
+```
+
 ## Next implementation slices
 
-1. Tighten option-level behavior parity and broaden conformance fixture coverage.
-2. Add CI-oriented conformance checks for Rust executable output compatibility.
+1. Expand explicit parity fixtures for edge-case metadata formatting and invalid ticket parsing behavior.

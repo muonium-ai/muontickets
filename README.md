@@ -153,6 +153,37 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py report --search auth --l
 
 By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data from `tickets/`, `tickets/archive/`, and `tickets/backlogs/`.
 
+## Rust Binary Releases (Preview)
+
+Package-manager path (Cargo):
+
+```bash
+# install from source checkout
+cd ports/rust-mt
+cargo install --path .
+```
+
+Direct binary download path (GitHub Releases):
+
+```bash
+# macOS/Linux example (replace tag and artifact name as needed)
+curl -L -o mt-rust.tar.gz https://github.com/muonium-ai/muontickets/releases/download/rust-vX.Y.Z/mt-rust-<arch>-<os>.tar.gz
+tar -xzf mt-rust.tar.gz
+```
+
+```powershell
+# Windows PowerShell example
+Invoke-WebRequest -Uri "https://github.com/muonium-ai/muontickets/releases/download/rust-vX.Y.Z/mt-rust-<arch>-windows.tar.gz" -OutFile "mt-rust.tar.gz"
+tar -xzf mt-rust.tar.gz
+```
+
+Release integrity verification:
+
+```bash
+shasum -a 256 -c SHA256SUMS
+cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/rust-release.yml@refs/(tags/rust-v.*|heads/main)$' SHA256SUMS
+```
+
 ## Changelog Process
 
 - User-visible changes must include an entry in `CHANGELOG.md`.
