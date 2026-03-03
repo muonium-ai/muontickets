@@ -60,6 +60,11 @@ Agent quick-reference guide: see [skills.md](skills.md) for install modes, comma
 
 Troubleshooting rule: do not edit files under `tickets/` directly for normal workflow actions (claim/status/comments/archive). Always use `mt.py` commands so transition checks, dependency checks, and metadata updates are applied consistently.
 
+Execution guidance:
+
+- Prefer one ticket fix per git commit and one pull request per ticket to keep reviews, rollback, and traceability clean.
+- When tickets are isolated (no shared files, no dependency coupling, no system-wide side effects), run multiple agents in parallel. Parallel independent execution is a core MuonTickets use case.
+
 Run these from the project root where MuonTickets is installed.
 
 ```bash
