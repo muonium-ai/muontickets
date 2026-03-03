@@ -18,6 +18,16 @@ Primary command path after install:
 uv run python3 tickets/mt/muontickets/muontickets/mt.py <command>
 ```
 
+Common mistake in submodule mode:
+
+```bash
+# Wrong
+uv run python3 muontickets/mt.py <command>
+
+# Right
+uv run python3 tickets/mt/muontickets/muontickets/mt.py <command>
+```
+
 ### 2) Direct checkout (MuonTickets core development)
 
 Use this only when you are working in the MuonTickets repository itself:

@@ -33,6 +33,20 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py init
 uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 ```
 
+### Common path mistake (submodule mode)
+
+Wrong (installs/runs from the wrong location):
+
+```bash
+uv run python3 muontickets/mt.py init
+```
+
+Right (submodule under tickets/mt):
+
+```bash
+uv run python3 tickets/mt/muontickets/muontickets/mt.py init
+```
+
 If you are in a direct MuonTickets checkout, use the root entrypoint:
 
 ```bash
