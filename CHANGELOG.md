@@ -16,6 +16,8 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Changed | Implemented Zig `report` command stub output and expanded `new`/`ls`/`pick`/`claim` option parity (`--depends-on`, label filters, branch override, WIP/dependency controls)
+- 2026-03-03 | Added | Added Zig conformance fixture and runner support for stream-agnostic output assertions to validate non-Python port behavior
 - 2026-03-03 | Changed | Implemented Zig commands `pick`, `comment`, `graph`, `export`, and `stats` with basic parity behavior
 - 2026-03-03 | Changed | Implemented Zig workflow commands `claim`, `set-status`, `done`, `archive`, and `validate` with transition and archive safety checks
 - 2026-03-03 | Changed | Implemented `init`, `new`, `ls`, and `show` command flow in Zig port with ticket file creation and listing/show support

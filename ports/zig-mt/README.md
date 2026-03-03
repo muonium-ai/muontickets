@@ -6,8 +6,8 @@ This folder contains the Zig implementation track for the MuonTickets non-Python
 
 - Zig project scaffold created.
 - Command surface mapped to current `mt.py` commands.
-- Implemented commands: `init`, `new`, `ls`, `show`, `pick`, `claim`, `comment`, `set-status`, `done`, `archive`, `graph`, `export`, `stats`, `validate`.
-- Remaining command handlers are placeholders and will be implemented in parity slices.
+- Implemented commands: `init`, `new`, `ls`, `show`, `pick`, `claim`, `comment`, `set-status`, `done`, `archive`, `graph`, `export`, `stats`, `validate`, `report`.
+- `new`/`ls`/`pick`/`claim` now support a broader parity option set (`--depends-on`, `--label`, filters, branch override, dependency/WIP controls).
 
 ## Build and run
 
@@ -17,9 +17,14 @@ zig build
 zig build run -- --help
 ```
 
+## Conformance runner integration
+
+```bash
+MT_CMD="$(pwd)/zig-out/bin/mt-zig" ../../.venv/bin/python ../../tests/conformance/runner.py --fixture ../../tests/conformance/fixtures/zig_reporting_graph_pick.json
+```
+
 ## Next slices
 
-1. Implement remaining command: `report`.
-2. Expand `new`/`pick`/`claim` parity with full option support and template/default behavior.
-3. Hook Zig binary into `tests/conformance` runner via `MT_CMD`.
-4. Add cross-compilation artifacts for macOS/Linux/Windows.
+1. Improve `report` from stubbed artifact to SQLite-compatible schema parity.
+2. Expand template/default behavior parity for `new` (including template ingestion).
+3. Add cross-compilation artifacts for macOS/Linux/Windows.

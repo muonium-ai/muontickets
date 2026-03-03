@@ -24,6 +24,7 @@ def run_step(cmd_prefix: list[str], cwd: Path, step: dict[str, Any]) -> tuple[bo
     expect_exit = int(step.get("expect_exit", 0))
     out = proc.stdout or ""
     err = proc.stderr or ""
+    combined = out + err
 
     if proc.returncode != expect_exit:
         return (
@@ -45,6 +46,14 @@ def run_step(cmd_prefix: list[str], cwd: Path, step: dict[str, Any]) -> tuple[bo
             return (
                 False,
                 f"[{name}] missing stderr text: {needle!r}\n"
+                f"cmd: {' '.join(cmd)}\nstdout:\n{out}\nstderr:\n{err}",
+            )
+
+    for needle in step.get("expect_output_contains", []) or []:
+        if needle not in combined:
+            return (
+                False,
+                f"[{name}] missing output text: {needle!r}\n"
                 f"cmd: {' '.join(cmd)}\nstdout:\n{out}\nstderr:\n{err}",
             )
 

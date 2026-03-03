@@ -1,0 +1,54 @@
+{
+  "name": "zig_reporting_graph_pick",
+  "description": "Exercises pick, graph, export, report, and validate against Zig CLI.",
+  "steps": [
+    {
+      "name": "init board",
+      "args": ["init"],
+      "expect_exit": 0,
+      "expect_output_contains": ["created"]
+    },
+    {
+      "name": "create ticket for pick",
+      "args": ["new", "Task Gamma"],
+      "expect_exit": 0,
+      "expect_output_contains": ["T-000002.md"]
+    },
+    {
+      "name": "pick ticket",
+      "args": ["pick", "--owner", "agent-b"],
+      "expect_exit": 0,
+      "expect_output_contains": ["picked T-000002"]
+    },
+    {
+      "name": "create dependent ticket",
+      "args": ["new", "Task Delta", "--depends-on", "T-000002"],
+      "expect_exit": 0,
+      "expect_output_contains": ["T-000003.md"]
+    },
+    {
+      "name": "render dependency graph",
+      "args": ["graph"],
+      "expect_exit": 0,
+      "expect_output_contains": ["T-000002 -> T-000003"]
+    },
+    {
+      "name": "export json",
+      "args": ["export", "--format", "json"],
+      "expect_exit": 0,
+      "expect_output_contains": ["\"id\":\"T-000002\"", "\"id\":\"T-000003\""]
+    },
+    {
+      "name": "build report database",
+      "args": ["report", "--search", "Task", "--limit", "5"],
+      "expect_exit": 0,
+      "expect_output_contains": ["report db:", "indexed tickets:", "Search results for: 'Task'"]
+    },
+    {
+      "name": "validate clean board",
+      "args": ["validate"],
+      "expect_exit": 0,
+      "expect_output_contains": ["MuonTickets validation OK."]
+    }
+  ]
+}

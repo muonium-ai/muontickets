@@ -67,8 +67,10 @@ fn printHelp() void {
     , .{});
 }
 
-    const statuses = [_][]const u8{ "ready", "claimed", "blocked", "needs_review", "done" };
-    const efforts = [_][]const u8{ "xs", "s", "m", "l" };
+const statuses = [_][]const u8{ "ready", "claimed", "blocked", "needs_review", "done" };
+const efforts = [_][]const u8{ "xs", "s", "m", "l" };
+const priorities = [_][]const u8{ "p0", "p1", "p2", "p3" };
+const ticket_types = [_][]const u8{ "code", "doc", "test", "research", "ops", "chore" };
 
 const default_template =
     \\\---
@@ -308,10 +310,103 @@ fn cmdInit(allocator: std.mem.Allocator) !void {
     }
 }
 
-fn cmdNew(allocator: std.mem.Allocator, title_arg: []const u8) !void {
-    const title = std.mem.trim(u8, title_arg, " \t\r\n");
+fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+    if (cmd_args.len < 1) {
+        std.debug.print("usage: mt-zig new <title> [--priority <p0|p1|p2|p3>] [--type <code|doc|test|research|ops|chore>] [--effort <xs|s|m|l>] [--label <label>]... [--depends-on <T-xxxxxx>]... [--goal <text>]\n", .{});
+        std.process.exit(2);
+    }
+
+    const title = std.mem.trim(u8, cmd_args[0], " \t\r\n");
     if (title.len == 0) {
         std.debug.print("new requires non-empty title\n", .{});
+        std.process.exit(2);
+    }
+
+    var priority: []const u8 = "p1";
+    var ticket_type: []const u8 = "code";
+    var effort: []const u8 = "s";
+    var goal: []const u8 = "";
+    var labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    defer labels.deinit(allocator);
+    var depends_on = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    defer depends_on.deinit(allocator);
+
+    var i: usize = 1;
+    while (i < cmd_args.len) : (i += 1) {
+        const a = cmd_args[i];
+        if (std.mem.eql(u8, a, "--priority")) {
+            if (i + 1 >= cmd_args.len) {
+                std.debug.print("--priority requires a value\n", .{});
+                std.process.exit(2);
+            }
+            priority = cmd_args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--type")) {
+            if (i + 1 >= cmd_args.len) {
+                std.debug.print("--type requires a value\n", .{});
+                std.process.exit(2);
+            }
+            ticket_type = cmd_args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--effort")) {
+            if (i + 1 >= cmd_args.len) {
+                std.debug.print("--effort requires a value\n", .{});
+                std.process.exit(2);
+            }
+            effort = cmd_args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--label")) {
+            if (i + 1 >= cmd_args.len) {
+                std.debug.print("--label requires a value\n", .{});
+                std.process.exit(2);
+            }
+            try labels.append(allocator, cmd_args[i + 1]);
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--depends-on")) {
+            if (i + 1 >= cmd_args.len) {
+                std.debug.print("--depends-on requires a value\n", .{});
+                std.process.exit(2);
+            }
+            const dep_id = cmd_args[i + 1];
+            if (!isTicketId(dep_id)) {
+                std.debug.print("invalid dependency ticket id: {s}\n", .{dep_id});
+                std.process.exit(2);
+            }
+            try depends_on.append(allocator, dep_id);
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--goal")) {
+            if (i + 1 >= cmd_args.len) {
+                std.debug.print("--goal requires a value\n", .{});
+                std.process.exit(2);
+            }
+            goal = cmd_args[i + 1];
+            i += 1;
+            continue;
+        }
+        std.debug.print("unknown option for new: {s}\n", .{a});
+        std.process.exit(2);
+    }
+
+    if (!priorityAllowed(priority)) {
+        std.debug.print("invalid priority: {s}\n", .{priority});
+        std.process.exit(2);
+    }
+    if (!typeAllowed(ticket_type)) {
+        std.debug.print("invalid type: {s}\n", .{ticket_type});
+        std.process.exit(2);
+    }
+    if (!effortAllowed(effort)) {
+        std.debug.print("invalid effort: {s}\n", .{effort});
         std.process.exit(2);
     }
 
@@ -328,17 +423,49 @@ fn cmdNew(allocator: std.mem.Allocator, title_arg: []const u8) !void {
     const ticket_path = try std.fs.path.join(allocator, &[_][]const u8{ tickets_dir, fname });
     defer allocator.free(ticket_path);
 
-    const body =
-        \\## Goal
-        \\Write a single-sentence goal.
-        \\
-        \\## Acceptance Criteria
-        \\- [ ] Define clear, testable checks (2–5 items)
-        \\
-        \\## Notes
-        \\
-    ;
-    try writeTicketFile(allocator, ticket_path, tid, title, "ready", "p1", "code", "s", "[]", body);
+    const labels_literal = try listLiteral(allocator, labels.items);
+    defer allocator.free(labels_literal);
+    const depends_literal = try listLiteral(allocator, depends_on.items);
+    defer allocator.free(depends_literal);
+
+    const body = if (goal.len > 0)
+        try std.fmt.allocPrint(
+            allocator,
+            \\## Goal
+            \\{s}
+            \\
+            \\## Acceptance Criteria
+            \\- [ ] Define clear, testable checks (2–5 items)
+            \\
+            \\## Notes
+            \\
+        ,
+            .{goal},
+        )
+    else
+        try std.fmt.allocPrint(
+            allocator,
+            \\## Goal
+            \\Write a single-sentence goal.
+            \\
+            \\## Acceptance Criteria
+            \\- [ ] Define clear, testable checks (2–5 items)
+            \\
+            \\## Notes
+            \\
+        ,
+            .{},
+        );
+    defer allocator.free(body);
+
+    try writeTicketFile(allocator, ticket_path, tid, title, "ready", priority, ticket_type, effort, labels_literal, body);
+
+    const written = try std.fs.cwd().readFileAlloc(allocator, ticket_path, 1024 * 1024);
+    defer allocator.free(written);
+    const with_depends = try setMetaField(allocator, written, "depends_on", depends_literal);
+    defer allocator.free(with_depends);
+    try std.fs.cwd().writeFile(.{ .sub_path = ticket_path, .data = with_depends });
+
     std.debug.print("{s}\n", .{ticket_path});
 }
 
@@ -469,6 +596,34 @@ fn effortAllowed(effort: []const u8) bool {
     return false;
 }
 
+fn priorityAllowed(priority: []const u8) bool {
+    for (priorities) |p| {
+        if (std.mem.eql(u8, p, priority)) return true;
+    }
+    return false;
+}
+
+fn typeAllowed(ticket_type: []const u8) bool {
+    for (ticket_types) |t| {
+        if (std.mem.eql(u8, t, ticket_type)) return true;
+    }
+    return false;
+}
+
+fn listLiteral(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, 32 + (items.len * 16));
+    errdefer out.deinit(allocator);
+    try out.append(allocator, '[');
+    for (items, 0..) |item, idx| {
+        if (idx > 0) try out.appendSlice(allocator, ", ");
+        try out.append(allocator, '"');
+        try out.appendSlice(allocator, item);
+        try out.append(allocator, '"');
+    }
+    try out.append(allocator, ']');
+    return out.toOwnedSlice(allocator);
+}
+
 fn transitionAllowed(old: []const u8, new: []const u8) bool {
     if (std.mem.eql(u8, old, "ready")) return std.mem.eql(u8, new, "claimed") or std.mem.eql(u8, new, "blocked");
     if (std.mem.eql(u8, old, "claimed")) return std.mem.eql(u8, new, "needs_review") or std.mem.eql(u8, new, "blocked") or std.mem.eql(u8, new, "ready");
@@ -535,7 +690,7 @@ fn depsSatisfied(repo: []const u8, allocator: std.mem.Allocator, content: []cons
     return true;
 }
 
-fn cmdClaim(allocator: std.mem.Allocator, id: []const u8, owner: []const u8, force: bool, ignore_deps: bool) !void {
+fn cmdClaim(allocator: std.mem.Allocator, id: []const u8, owner: []const u8, branch_opt: ?[]const u8, force: bool, ignore_deps: bool) !void {
     if (!isTicketId(id)) {
         std.debug.print("invalid ticket id: {s}\n", .{id});
         std.process.exit(2);
@@ -578,7 +733,7 @@ fn cmdClaim(allocator: std.mem.Allocator, id: []const u8, owner: []const u8, for
     const next2 = try setMetaField(allocator, next, "owner", owner);
     defer allocator.free(next2);
     const title = parseMetaField(content, "title") orelse "task";
-    const branch = try defaultBranch(allocator, id, title);
+    const branch = if (branch_opt) |b| try allocator.dupe(u8, b) else try defaultBranch(allocator, id, title);
     defer allocator.free(branch);
     const next3 = try setMetaField(allocator, next2, "branch", branch);
     defer allocator.free(next3);
@@ -836,7 +991,57 @@ fn cmdComment(allocator: std.mem.Allocator, id: []const u8, text: []const u8) !v
     std.debug.print("commented on {s}\n", .{id});
 }
 
-fn cmdPick(allocator: std.mem.Allocator, owner: []const u8) !void {
+fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+    const owner = getOptValue(cmd_args, "--owner") orelse {
+        std.debug.print("pick requires --owner <owner>\n", .{});
+        std.process.exit(2);
+    };
+    const priority_filter = getOptValue(cmd_args, "--priority");
+    if (priority_filter != null and !priorityAllowed(priority_filter.?)) {
+        std.debug.print("invalid priority: {s}\n", .{priority_filter.?});
+        std.process.exit(2);
+    }
+    const type_filter = getOptValue(cmd_args, "--type");
+    if (type_filter != null and !typeAllowed(type_filter.?)) {
+        std.debug.print("invalid type: {s}\n", .{type_filter.?});
+        std.process.exit(2);
+    }
+    const explicit_branch = getOptValue(cmd_args, "--branch");
+    const ignore_deps = hasFlag(cmd_args, "--ignore-deps");
+    const json_out = hasFlag(cmd_args, "--json");
+    const max_claimed_raw = getOptValue(cmd_args, "--max-claimed-per-owner") orelse "2";
+    const max_claimed = std.fmt.parseInt(u32, max_claimed_raw, 10) catch {
+        std.debug.print("invalid --max-claimed-per-owner: {s}\n", .{max_claimed_raw});
+        std.process.exit(2);
+    };
+
+    var required_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    defer required_labels.deinit(allocator);
+    var avoid_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    defer avoid_labels.deinit(allocator);
+    var arg_i: usize = 0;
+    while (arg_i < cmd_args.len) : (arg_i += 1) {
+        const a = cmd_args[arg_i];
+        if (std.mem.eql(u8, a, "--label")) {
+            if (arg_i + 1 >= cmd_args.len) {
+                std.debug.print("--label requires a value\n", .{});
+                std.process.exit(2);
+            }
+            try required_labels.append(allocator, cmd_args[arg_i + 1]);
+            arg_i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--avoid-label")) {
+            if (arg_i + 1 >= cmd_args.len) {
+                std.debug.print("--avoid-label requires a value\n", .{});
+                std.process.exit(2);
+            }
+            try avoid_labels.append(allocator, cmd_args[arg_i + 1]);
+            arg_i += 1;
+            continue;
+        }
+    }
+
     const repo = try findRepoRoot(allocator);
     defer allocator.free(repo);
     const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
@@ -844,6 +1049,27 @@ fn cmdPick(allocator: std.mem.Allocator, owner: []const u8) !void {
     if (!dirExists(tdir)) {
         std.debug.print("no claimable tickets found (ready + deps satisfied + filters).\n", .{});
         std.process.exit(3);
+    }
+
+    var claimed_count: u32 = 0;
+    var count_dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
+    defer count_dir.close();
+    var count_it = count_dir.iterate();
+    while (try count_it.next()) |entry| {
+        if (entry.kind != .file or !isTicketFilename(entry.name)) continue;
+        const count_path = try std.fs.path.join(allocator, &[_][]const u8{ tdir, entry.name });
+        defer allocator.free(count_path);
+        const count_content = try std.fs.cwd().readFileAlloc(allocator, count_path, 1024 * 1024);
+        defer allocator.free(count_content);
+        const status = parseMetaField(count_content, "status") orelse "";
+        const ticket_owner = parseMetaField(count_content, "owner") orelse "";
+        if (std.mem.eql(u8, status, "claimed") and std.mem.eql(u8, ticket_owner, owner)) {
+            claimed_count += 1;
+        }
+    }
+    if (claimed_count >= max_claimed) {
+        std.debug.print("owner '{s}' already has {d} claimed tickets (max {d}).\n", .{ owner, claimed_count, max_claimed });
+        std.process.exit(2);
     }
 
     var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
@@ -858,11 +1084,36 @@ fn cmdPick(allocator: std.mem.Allocator, owner: []const u8) !void {
         defer allocator.free(content);
         const status = parseMetaField(content, "status") orelse "";
         if (!std.mem.eql(u8, status, "ready")) continue;
-        if (!depsSatisfied(repo, allocator, content)) continue;
+
+        if (priority_filter) |pf| {
+            const p = parseMetaField(content, "priority") orelse "";
+            if (!std.mem.eql(u8, p, pf)) continue;
+        }
+        if (type_filter) |tf| {
+            const tp = parseMetaField(content, "type") orelse "";
+            if (!std.mem.eql(u8, tp, tf)) continue;
+        }
+        var labels_ok = true;
+        for (required_labels.items) |label| {
+            if (!parseListContains(content, "labels", label)) {
+                labels_ok = false;
+                break;
+            }
+        }
+        if (!labels_ok) continue;
+        var avoid_hit = false;
+        for (avoid_labels.items) |label| {
+            if (parseListContains(content, "labels", label)) {
+                avoid_hit = true;
+                break;
+            }
+        }
+        if (avoid_hit) continue;
+        if (!ignore_deps and !depsSatisfied(repo, allocator, content)) continue;
 
         const id = parseMetaField(content, "id") orelse entry.name[0..8];
         const title = parseMetaField(content, "title") orelse "task";
-        const branch = try defaultBranch(allocator, id, title);
+        const branch = if (explicit_branch) |b| try allocator.dupe(u8, b) else try defaultBranch(allocator, id, title);
         defer allocator.free(branch);
 
         const next = try setMetaField(allocator, content, "status", "claimed");
@@ -872,7 +1123,11 @@ fn cmdPick(allocator: std.mem.Allocator, owner: []const u8) !void {
         const next3 = try setMetaField(allocator, next2, "branch", branch);
         defer allocator.free(next3);
         try std.fs.cwd().writeFile(.{ .sub_path = path, .data = next3 });
-        std.debug.print("picked {s} (score 0.0) -> claimed as {s} (branch: {s})\n", .{ id, owner, branch });
+        if (json_out) {
+            std.debug.print("{{\"picked\":\"{s}\",\"owner\":\"{s}\",\"branch\":\"{s}\",\"score\":0.0}}\n", .{ id, owner, branch });
+        } else {
+            std.debug.print("picked {s} (score 0.0) -> claimed as {s} (branch: {s})\n", .{ id, owner, branch });
+        }
         return;
     }
 
@@ -976,7 +1231,176 @@ fn cmdStats(allocator: std.mem.Allocator) !void {
     std.debug.print("  done         {d}\n", .{done});
 }
 
-fn cmdLs(allocator: std.mem.Allocator) !void {
+const ReportRow = struct {
+    id: []u8,
+    title: []u8,
+    status: []u8,
+    owner: []u8,
+    labels: []u8,
+    tags: []u8,
+    path: []u8,
+    body: []u8,
+};
+
+fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+
+    var db_rel: []const u8 = "tickets/tickets_report.sqlite3";
+    var search: []const u8 = "";
+    var limit: usize = 30;
+
+    var i: usize = 0;
+    while (i < cmd_args.len) : (i += 1) {
+        const a = cmd_args[i];
+        if (std.mem.eql(u8, a, "--db")) {
+            if (i + 1 >= cmd_args.len) {
+                std.debug.print("--db requires a value\n", .{});
+                std.process.exit(2);
+            }
+            db_rel = cmd_args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--search")) {
+            if (i + 1 >= cmd_args.len) {
+                std.debug.print("--search requires a value\n", .{});
+                std.process.exit(2);
+            }
+            search = cmd_args[i + 1];
+            i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--limit")) {
+            if (i + 1 >= cmd_args.len) {
+                std.debug.print("--limit requires a value\n", .{});
+                std.process.exit(2);
+            }
+            limit = std.fmt.parseInt(usize, cmd_args[i + 1], 10) catch {
+                std.debug.print("invalid --limit: {s}\n", .{cmd_args[i + 1]});
+                std.process.exit(2);
+            };
+            i += 1;
+            continue;
+        }
+    }
+
+    const db_path = if (std.fs.path.isAbsolute(db_rel))
+        try allocator.dupe(u8, db_rel)
+    else
+        try std.fs.path.join(allocator, &[_][]const u8{ repo, db_rel });
+    defer allocator.free(db_path);
+
+    if (std.fs.path.dirname(db_path)) |parent| {
+        try std.fs.cwd().makePath(parent);
+    }
+
+    var rows = try std.ArrayList(ReportRow).initCapacity(allocator, 64);
+    defer {
+        for (rows.items) |row| {
+            allocator.free(row.id);
+            allocator.free(row.title);
+            allocator.free(row.status);
+            allocator.free(row.owner);
+            allocator.free(row.labels);
+            allocator.free(row.tags);
+            allocator.free(row.path);
+            allocator.free(row.body);
+        }
+        rows.deinit(allocator);
+    }
+
+    const roots = [_][]const u8{ "tickets", "tickets/archive", "tickets/backlogs" };
+    for (roots) |root_rel| {
+        const root = try std.fs.path.join(allocator, &[_][]const u8{ repo, root_rel });
+        defer allocator.free(root);
+        if (!dirExists(root)) continue;
+
+        var dir = try std.fs.cwd().openDir(root, .{ .iterate = true });
+        defer dir.close();
+        var walker = try dir.walk(allocator);
+        defer walker.deinit();
+
+        while (try walker.next()) |entry| {
+            if (entry.kind != .file) continue;
+            const base = std.fs.path.basename(entry.path);
+            if (!isTicketFilename(base)) continue;
+            const full_path = try std.fs.path.join(allocator, &[_][]const u8{ root, entry.path });
+            defer allocator.free(full_path);
+            const content = try std.fs.cwd().readFileAlloc(allocator, full_path, 1024 * 1024);
+            defer allocator.free(content);
+
+            const rel = try std.fs.path.join(allocator, &[_][]const u8{ root_rel, entry.path });
+            defer allocator.free(rel);
+
+            try rows.append(allocator, .{
+                .id = try allocator.dupe(u8, parseMetaField(content, "id") orelse base[0..8]),
+                .title = try allocator.dupe(u8, parseMetaField(content, "title") orelse ""),
+                .status = try allocator.dupe(u8, parseMetaField(content, "status") orelse ""),
+                .owner = try allocator.dupe(u8, parseMetaField(content, "owner") orelse ""),
+                .labels = try allocator.dupe(u8, parseMetaField(content, "labels") orelse "[]"),
+                .tags = try allocator.dupe(u8, parseMetaField(content, "tags") orelse "[]"),
+                .path = try allocator.dupe(u8, rel),
+                .body = try allocator.dupe(u8, content),
+            });
+        }
+    }
+
+    const db_stub = try std.fmt.allocPrint(allocator, "MuonTickets report stub\nrows={d}\n", .{rows.items.len});
+    defer allocator.free(db_stub);
+    try std.fs.cwd().writeFile(.{ .sub_path = db_path, .data = db_stub });
+
+    std.debug.print("report db: {s}\n", .{db_path});
+    std.debug.print("indexed tickets: {d}\n", .{rows.items.len});
+
+    if (search.len > 0) {
+        std.debug.print("\nSearch results for: '{s}'\n", .{search});
+        var emitted: usize = 0;
+        for (rows.items) |row| {
+            if (emitted >= limit) break;
+            const hit = std.mem.indexOf(u8, row.id, search) != null or
+                std.mem.indexOf(u8, row.title, search) != null or
+                std.mem.indexOf(u8, row.body, search) != null or
+                std.mem.indexOf(u8, row.labels, search) != null or
+                std.mem.indexOf(u8, row.tags, search) != null;
+            if (!hit) continue;
+            std.debug.print("  {s}  {s} {s}  {s}  ({s})\n", .{ row.id, row.status, row.owner, row.title, row.path });
+            emitted += 1;
+        }
+    }
+}
+
+fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+    const status_filter = getOptValue(cmd_args, "--status");
+    if (status_filter != null and !statusAllowed(status_filter.?)) {
+        std.debug.print("invalid status: {s}\n", .{status_filter.?});
+        std.process.exit(2);
+    }
+    const owner_filter = getOptValue(cmd_args, "--owner");
+    const priority_filter = getOptValue(cmd_args, "--priority");
+    if (priority_filter != null and !priorityAllowed(priority_filter.?)) {
+        std.debug.print("invalid priority: {s}\n", .{priority_filter.?});
+        std.process.exit(2);
+    }
+    const type_filter = getOptValue(cmd_args, "--type");
+    if (type_filter != null and !typeAllowed(type_filter.?)) {
+        std.debug.print("invalid type: {s}\n", .{type_filter.?});
+        std.process.exit(2);
+    }
+    var required_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    defer required_labels.deinit(allocator);
+    var label_i: usize = 0;
+    while (label_i < cmd_args.len) : (label_i += 1) {
+        if (std.mem.eql(u8, cmd_args[label_i], "--label")) {
+            if (label_i + 1 >= cmd_args.len) {
+                std.debug.print("--label requires a value\n", .{});
+                std.process.exit(2);
+            }
+            try required_labels.append(allocator, cmd_args[label_i + 1]);
+            label_i += 1;
+        }
+    }
+
     const repo = try findRepoRoot(allocator);
     defer allocator.free(repo);
     const tickets_dir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
@@ -1005,6 +1429,31 @@ fn cmdLs(allocator: std.mem.Allocator) !void {
         const owner = parseMetaField(content, "owner") orelse "";
         const title = parseMetaField(content, "title") orelse "";
         const labels = parseMetaField(content, "labels") orelse "[]";
+
+        if (status_filter) |sf| {
+            if (!std.mem.eql(u8, status, sf)) continue;
+        }
+        if (owner_filter) |of| {
+            if (of.len == 0) {
+                if (!std.mem.eql(u8, owner, "null")) continue;
+            } else if (!std.mem.eql(u8, owner, of)) {
+                continue;
+            }
+        }
+        if (priority_filter) |pf| {
+            if (!std.mem.eql(u8, pr, pf)) continue;
+        }
+        if (type_filter) |tf| {
+            if (!std.mem.eql(u8, tp, tf)) continue;
+        }
+        var labels_ok = true;
+        for (required_labels.items) |label| {
+            if (!parseListContains(content, "labels", label)) {
+                labels_ok = false;
+                break;
+            }
+        }
+        if (!labels_ok) continue;
 
         std.debug.print("{s}  {s}  {s} {s} {s} {s}  {s}  {s}\n", .{ id, status, pr, tp, effort, owner, title, labels });
     }
@@ -1056,14 +1505,8 @@ pub fn main() !void {
 
     switch (command) {
         .init => try cmdInit(allocator),
-        .new => {
-            if (args.len < 3) {
-                std.debug.print("usage: mt-zig new <title>\n", .{});
-                std.process.exit(2);
-            }
-            try cmdNew(allocator, args[2]);
-        },
-        .ls => try cmdLs(allocator),
+        .new => try cmdNew(allocator, args[2..]),
+        .ls => try cmdLs(allocator, args[2..]),
         .show => {
             if (args.len < 3) {
                 std.debug.print("usage: mt-zig show <id>\n", .{});
@@ -1071,23 +1514,18 @@ pub fn main() !void {
             }
             try cmdShow(allocator, args[2]);
         },
-        .pick => {
-            const owner = getOptValue(args[2..], "--owner") orelse {
-                std.debug.print("pick requires --owner <owner>\n", .{});
-                std.process.exit(2);
-            };
-            try cmdPick(allocator, owner);
-        },
+        .pick => try cmdPick(allocator, args[2..]),
         .claim => {
             if (args.len < 4) {
-                std.debug.print("usage: mt-zig claim <id> --owner <owner> [--force] [--ignore-deps]\n", .{});
+                std.debug.print("usage: mt-zig claim <id> --owner <owner> [--branch <name>] [--force] [--ignore-deps]\n", .{});
                 std.process.exit(2);
             }
             const owner = getOptValue(args[3..], "--owner") orelse {
                 std.debug.print("claim requires --owner <owner>\n", .{});
                 std.process.exit(2);
             };
-            try cmdClaim(allocator, args[2], owner, hasFlag(args[3..], "--force"), hasFlag(args[3..], "--ignore-deps"));
+            const branch = getOptValue(args[3..], "--branch");
+            try cmdClaim(allocator, args[2], owner, branch, hasFlag(args[3..], "--force"), hasFlag(args[3..], "--ignore-deps"));
         },
         .comment => {
             if (args.len < 4) {
@@ -1121,6 +1559,6 @@ pub fn main() !void {
         .@"export" => try cmdExport(allocator),
         .stats => try cmdStats(allocator),
         .validate => try cmdValidate(allocator),
-        .report => std.debug.print("TODO: report (zig port)\n", .{}),
+        .report => try cmdReport(allocator, args[2..]),
     }
 }
