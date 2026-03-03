@@ -53,6 +53,28 @@ Note: this port links against system `sqlite3` + libc, so cross-target builds re
 - Build output: native release artifacts from Linux/macOS/Windows runners, aggregated into release assets with combined `SHA256SUMS`
 - Signing: CI performs keyless Sigstore signing of `SHA256SUMS` and publishes `SHA256SUMS.sig` + `SHA256SUMS.pem`.
 
+## Consumer verification
+
+Manual verification (in a release download directory):
+
+```bash
+shasum -a 256 -c SHA256SUMS
+
+cosign verify-blob \
+	--signature SHA256SUMS.sig \
+	--certificate SHA256SUMS.pem \
+	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
+	--certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/zig-release.yml@refs/(tags/zig-v.*|heads/main)$' \
+	SHA256SUMS
+```
+
+Automated helper:
+
+```bash
+cd ports/zig-mt
+./scripts/verify-release.sh --dist dist
+```
+
 ## Conformance runner integration
 
 ```bash
@@ -61,4 +83,4 @@ MT_CMD="$(pwd)/zig-out/bin/mt-zig" ../../.venv/bin/python ../../tests/conformanc
 
 ## Next slices
 
-1. Add provenance/verification docs for consumers (`cosign verify-blob` example with certificate identity constraints).
+1. Add CI checks that fail release publication when verification script fails on generated artifacts.
