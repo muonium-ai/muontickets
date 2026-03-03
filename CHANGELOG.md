@@ -16,6 +16,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Changed | Implemented Zig workflow commands `claim`, `set-status`, `done`, `archive`, and `validate` with transition and archive safety checks
 - 2026-03-03 | Changed | Implemented `init`, `new`, `ls`, and `show` command flow in Zig port with ticket file creation and listing/show support
 - 2026-03-03 | Added | Bootstrapped initial Zig `mt` port scaffold under `ports/zig-mt` with mapped command surface and buildable CLI entrypoint
 - 2026-03-03 | Added | Bootstrapped initial Rust `mt` port scaffold under `ports/rust-mt` with mapped command surface and buildable CLI entrypoint
