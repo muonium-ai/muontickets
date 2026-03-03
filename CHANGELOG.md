@@ -16,6 +16,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Docs | Added `ports/zig-mt/parity_report.md` with a current Zig-vs-Python parity status matrix and remaining deltas
 - 2026-03-03 | Changed | Implemented Python-aligned Zig `pick` scoring and tie-break behavior (priority/effort/dependency/age weighting, deterministic selection, and emitted score) with conformance coverage
 - 2026-03-03 | Changed | Closed Zig option parity gaps for `set-status --clear-owner`, `graph --mermaid/--open-only`, `export --format json|jsonl`, and `validate` policy flags, with new conformance fixture coverage
 - 2026-03-03 | Added | Added Zig release consumer verification guidance and `scripts/verify-release.sh` for checksum + Sigstore certificate identity validation
