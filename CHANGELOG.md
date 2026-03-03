@@ -16,6 +16,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Added | Added GitHub Actions Zig release workflow for native artifact publishing on `zig-v*` tags with keyless Sigstore signing of `SHA256SUMS`
 - 2026-03-03 | Added | Added Zig cross-compilation release script producing macOS/Linux/Windows archives and `SHA256SUMS` under `ports/zig-mt/dist`, with per-target failure reporting when sysroots/libs are unavailable
 - 2026-03-03 | Changed | Added Zig `new` template-ingestion parity so `tickets/ticket.template` defaults/body are applied when CLI overrides are absent (including labels/tags/depends/status/owner/branch)
 - 2026-03-03 | Changed | Upgraded Zig `report` to generate real SQLite output (`tickets` and `parse_errors` tables with indexes) and run SQL-based summary/search queries

@@ -42,6 +42,15 @@ Build only selected targets:
 
 Note: this port links against system `sqlite3` + libc, so cross-target builds require target-compatible sysroots/libraries. The script continues on failed targets and reports a summary.
 
+## CI publishing and signing
+
+- Workflow: `.github/workflows/zig-release.yml`
+- Triggers:
+	- Tag push matching `zig-v*` (build + publish)
+	- Manual dispatch (`workflow_dispatch`) with optional `publish=true`
+- Build output: `ports/zig-mt/dist/*` (artifact archive + `SHA256SUMS`)
+- Signing: CI performs keyless Sigstore signing of `SHA256SUMS` and publishes `SHA256SUMS.sig` + `SHA256SUMS.pem`.
+
 ## Conformance runner integration
 
 ```bash
@@ -50,4 +59,4 @@ MT_CMD="$(pwd)/zig-out/bin/mt-zig" ../../.venv/bin/python ../../tests/conformanc
 
 ## Next slices
 
-1. Expand release automation with CI publishing/signing.
+1. Expand release CI to publish multi-runner artifacts (Linux/macOS/Windows) once target-compatible `sqlite3` sysroots/libs are available.
