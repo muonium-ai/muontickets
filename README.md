@@ -151,7 +151,7 @@ Run with search:
 uv run python3 tickets/mt/muontickets/muontickets/mt.py report --search auth --limit 20
 ```
 
-By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data from `tickets/`, `tickets/archive/`, and `tickets/backlogs/`.
+By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data from `tickets/`, `tickets/archive/`, `tickets/errors/`, and `tickets/backlogs/`.
 
 ## Rust Binary Releases (Preview)
 

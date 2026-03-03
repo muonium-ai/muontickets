@@ -16,6 +16,8 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Docs | Updated project objective, skills guide, and ticket template with queue operator lifecycle guidance (`allocate-task`, `comment`, `fail-task`, triage of `tickets/errors`)
+- 2026-03-03 | Docs | Updated parity documentation with queue command support (`allocate-task`/`fail-task`) and documented `report` indexing of `tickets/errors`
 - 2026-03-03 | Added | Added Rust native release pipeline (`rust-v*` tags) with Linux/macOS/Windows artifact publishing, checksum manifest signing (Sigstore keyless), fixture smoke checks, and release verification/install guidance
 - 2026-03-03 | Docs | Added sandbox-safe multi-agent workflow guidance (worktrees, branch-per-agent + PR integration, project-local `tmp/<agent>/`, `make clean`, and smoke-test-first validation)
 - 2026-03-03 | Docs | Added `ports/zig-mt/parity_report.md` with a current Zig-vs-Python parity status matrix and remaining deltas

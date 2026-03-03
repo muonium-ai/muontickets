@@ -29,6 +29,12 @@ class QueueAllocationTests(unittest.TestCase):
         )
         ticket_path.write_text(updated, encoding="utf-8")
 
+    def _meta_field(self, ticket_path: Path, key: str) -> str:
+        text = ticket_path.read_text(encoding="utf-8")
+        match = re.search(rf"^{re.escape(key)}:\s*(.*)$", text, flags=re.M)
+        self.assertIsNotNone(match, f"missing metadata field: {key}")
+        return (match.group(1) if match else "").strip()
+
     def test_allocate_task_can_reallocate_expired_lease(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workdir = Path(td)
@@ -61,7 +67,9 @@ class QueueAllocationTests(unittest.TestCase):
             self.assertEqual(self.run_cli(workdir, "new", "Retry Ticket").returncode, 0)
 
             tid = "T-000002"
-            for _ in range(2):
+            ticket_path = workdir / "tickets" / f"{tid}.md"
+
+            for attempt in range(1, 3):
                 alloc = self.run_cli(workdir, "allocate-task", "--owner", "agent-a")
                 self.assertEqual(alloc.returncode, 0)
                 self.assertIn(tid, alloc.stdout)
@@ -69,6 +77,11 @@ class QueueAllocationTests(unittest.TestCase):
                 failed = self.run_cli(workdir, "fail-task", tid, "--error", "transient failure")
                 self.assertEqual(failed.returncode, 0)
                 self.assertIn("re-queued", failed.stdout)
+                self.assertIn(f"{attempt}/3", failed.stdout)
+                self.assertEqual(self._meta_field(ticket_path, "status"), "ready")
+                self.assertEqual(self._meta_field(ticket_path, "retry_count"), str(attempt))
+                self.assertEqual(self._meta_field(ticket_path, "retry_limit"), "3")
+                self.assertEqual(self._meta_field(ticket_path, "last_error"), "transient failure")
 
             alloc = self.run_cli(workdir, "allocate-task", "--owner", "agent-a")
             self.assertEqual(alloc.returncode, 0)
@@ -79,7 +92,16 @@ class QueueAllocationTests(unittest.TestCase):
             self.assertIn("moved to tickets/errors", exhausted.stdout)
 
             self.assertFalse((workdir / "tickets" / f"{tid}.md").exists())
-            self.assertTrue((workdir / "tickets" / "errors" / f"{tid}.md").exists())
+            error_ticket_path = workdir / "tickets" / "errors" / f"{tid}.md"
+            self.assertTrue(error_ticket_path.exists())
+            self.assertEqual(self._meta_field(error_ticket_path, "status"), "blocked")
+            self.assertEqual(self._meta_field(error_ticket_path, "retry_count"), "3")
+            self.assertEqual(self._meta_field(error_ticket_path, "retry_limit"), "3")
+            self.assertEqual(self._meta_field(error_ticket_path, "last_error"), "persistent failure")
+
+            no_candidate = self.run_cli(workdir, "allocate-task", "--owner", "agent-a", "--label", "queue")
+            self.assertEqual(no_candidate.returncode, 3)
+            self.assertIn("no allocatable tickets found", no_candidate.stderr)
 
 
 if __name__ == "__main__":

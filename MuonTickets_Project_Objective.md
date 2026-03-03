@@ -167,6 +167,14 @@ Agent loop:
 6.  `mt set-status T-xxxx needs_review`
 7.  After merge → `mt done T-xxxx`
 
+Queue operator runbook:
+
+1.  Allocate one ticket with `mt allocate-task --owner agent-X`.
+2.  Post progress with `mt comment T-xxxx "..."` while implementing.
+3.  On success: `mt set-status T-xxxx needs_review` then `mt done T-xxxx`.
+4.  On execution failure: `mt fail-task T-xxxx --error "..."` to increment retries and re-queue.
+5.  For retry exhaustion, triage entries moved to `tickets/errors/` and inspect incidents in `tickets/incidents.log`.
+
 In submodule-based repos, command path is typically:
 
   uv run python3 tickets/mt/muontickets/muontickets/mt.py <command>

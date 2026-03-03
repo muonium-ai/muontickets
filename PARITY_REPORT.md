@@ -21,11 +21,13 @@ Assessment method:
 | `new` options (`--priority --type --effort --label --tag --depends-on --goal`) | ✅ | ✅ | ✅ | None | Domain parity aligned to `p0/p1/p2` + `spec/code/tests/docs/refactor/chore` | Aligned |
 | `ls` options (`--status --label --owner --priority --type --show-invalid`) | ✅ | ✅ | ✅ | None | Zig `--show-invalid` parity was implemented and regression-tested | Aligned |
 | `pick` options (`--owner --label --avoid-label --priority --type --branch --ignore-deps --max-claimed-per-owner --json`) | ✅ | ✅ | ✅ | None | Scoring/tie-break covered by `pick_scoring` fixture | Aligned |
+| `allocate-task` queue leasing (`--owner --label --avoid-label --priority --type --branch --ignore-deps --max-claimed-per-owner --lease-minutes --json`) | ✅ | ✅ | ✅ | None | Allocation + lease lifecycle covered by `queue_allocate_fail` fixture | Aligned |
+| `fail-task` retry and escalation (`--error --retry-limit --force`) + move-to-errors flow | ✅ | ✅ | ✅ | None | Retry requeue + retry-limit exhaustion to `tickets/errors` covered by `queue_allocate_fail` fixture | Aligned |
 | `claim/set-status/done/archive` workflow guards | ✅ | ✅ | ✅ | None | Transition + dependency/archive safety behavior covered by fixtures | Aligned |
 | `graph` options (`--mermaid --open-only`) | ✅ | ✅ | ✅ | None | Verified in reporting/graph fixtures | Aligned |
 | `export` formats (`json/jsonl`) + payload shape | ✅ | ✅ | ✅ | None | Zig payload parity (labels/tags/owner/dates/deps/branch/excerpt/path) implemented | Aligned |
 | `validate` policy flags (`--max-claimed-per-owner --enforce-done-deps`) and strict checks | ✅ | ✅ | ✅ | None | Zig strict checks (parse errors, required fields, date order) added + tested | Aligned |
-| `report` options (`--db --search --limit --summary`) + SQLite output | ✅ | ✅ | ✅ | None | Report DB + summary/search behavior validated in fixture runs | Aligned |
+| `report` options (`--db --search --limit --summary`) + SQLite output | ✅ | ✅ | ✅ | None | Report DB + summary/search behavior validated in fixture runs, including `tickets/errors` search hits | Aligned |
 
 ## Conformance Status
 

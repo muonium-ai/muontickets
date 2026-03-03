@@ -9,6 +9,8 @@ const Command = enum {
     ls,
     show,
     pick,
+    allocate_task,
+    fail_task,
     claim,
     comment,
     set_status,
@@ -27,6 +29,8 @@ fn parseCommand(raw: []const u8) ?Command {
     if (std.mem.eql(u8, raw, "ls")) return .ls;
     if (std.mem.eql(u8, raw, "show")) return .show;
     if (std.mem.eql(u8, raw, "pick")) return .pick;
+    if (std.mem.eql(u8, raw, "allocate-task")) return .allocate_task;
+    if (std.mem.eql(u8, raw, "fail-task")) return .fail_task;
     if (std.mem.eql(u8, raw, "claim")) return .claim;
     if (std.mem.eql(u8, raw, "comment")) return .comment;
     if (std.mem.eql(u8, raw, "set-status")) return .set_status;
@@ -53,6 +57,8 @@ fn printHelp() void {
         \\  ls
         \\  show
         \\  pick
+        \\  allocate-task
+        \\  fail-task
         \\  claim
         \\  comment
         \\  set-status
@@ -805,6 +811,12 @@ fn archivedTicketPath(allocator: std.mem.Allocator, repo: []const u8, id: []cons
     return std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets", "archive", file_name });
 }
 
+fn errorTicketPath(allocator: std.mem.Allocator, repo: []const u8, id: []const u8) ![]u8 {
+    const file_name = try std.fmt.allocPrint(allocator, "{s}.md", .{id});
+    defer allocator.free(file_name);
+    return std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets", "errors", file_name });
+}
+
 fn statusAllowed(status: []const u8) bool {
     for (statuses) |s| {
         if (std.mem.eql(u8, s, status)) return true;
@@ -892,6 +904,77 @@ fn todayIsoDate(allocator: std.mem.Allocator) ![]u8 {
         "{d:0>4}-{d:0>2}-{d:0>2}",
         .{ @as(u32, @intCast(civil.year)), @as(u8, @intCast(civil.month)), @as(u8, @intCast(civil.day)) },
     );
+}
+
+fn nowUtcIsoTimestamp(allocator: std.mem.Allocator) ![]u8 {
+    const now_ts = std.time.timestamp();
+    const days = @divFloor(now_ts, 86400);
+    const secs_of_day = @mod(now_ts, 86400);
+    const civil = civilFromDays(days);
+    const hour: i64 = @divFloor(secs_of_day, 3600);
+    const minute: i64 = @divFloor(@mod(secs_of_day, 3600), 60);
+    const second: i64 = @mod(secs_of_day, 60);
+    return std.fmt.allocPrint(
+        allocator,
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
+        .{
+            @as(u32, @intCast(civil.year)),
+            @as(u8, @intCast(civil.month)),
+            @as(u8, @intCast(civil.day)),
+            @as(u8, @intCast(hour)),
+            @as(u8, @intCast(minute)),
+            @as(u8, @intCast(second)),
+        },
+    );
+}
+
+fn parseIsoTimestampSeconds(raw: []const u8) ?i64 {
+    if (raw.len != 20) return null;
+    if (raw[4] != '-' or raw[7] != '-' or raw[10] != 'T' or raw[13] != ':' or raw[16] != ':' or raw[19] != 'Z') return null;
+
+    const year = std.fmt.parseInt(i64, raw[0..4], 10) catch return null;
+    const month = std.fmt.parseInt(i64, raw[5..7], 10) catch return null;
+    const day = std.fmt.parseInt(i64, raw[8..10], 10) catch return null;
+    const hour = std.fmt.parseInt(i64, raw[11..13], 10) catch return null;
+    const minute = std.fmt.parseInt(i64, raw[14..16], 10) catch return null;
+    const second = std.fmt.parseInt(i64, raw[17..19], 10) catch return null;
+    if (month < 1 or month > 12) return null;
+    if (day < 1 or day > 31) return null;
+    if (hour < 0 or hour > 23) return null;
+    if (minute < 0 or minute > 59) return null;
+    if (second < 0 or second > 59) return null;
+
+    const days = daysFromCivil(year, month, day);
+    return days * 86400 + hour * 3600 + minute * 60 + second;
+}
+
+fn leaseExpired(content: []const u8, now_ts: i64) bool {
+    const lease = parseMetaField(content, "lease_expires_at") orelse return false;
+    if (std.mem.eql(u8, lease, "null") or lease.len == 0) return false;
+    const lease_ts = parseIsoTimestampSeconds(lease) orelse return false;
+    return now_ts >= lease_ts;
+}
+
+fn appendIncident(allocator: std.mem.Allocator, repo: []const u8, message: []const u8) !void {
+    const tickets_dir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
+    defer allocator.free(tickets_dir);
+    if (!dirExists(tickets_dir)) try std.fs.cwd().makePath(tickets_dir);
+
+    const incidents_path = try std.fs.path.join(allocator, &[_][]const u8{ tickets_dir, "incidents.log" });
+    defer allocator.free(incidents_path);
+
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(allocator);
+    if (fileExists(incidents_path)) {
+        const existing = try std.fs.cwd().readFileAlloc(allocator, incidents_path, 1024 * 1024);
+        defer allocator.free(existing);
+        try out.appendSlice(allocator, existing);
+    }
+
+    const now_iso = try nowUtcIsoTimestamp(allocator);
+    defer allocator.free(now_iso);
+    try out.writer(allocator).print("{s} {s}\n", .{ now_iso, message });
+    try std.fs.cwd().writeFile(.{ .sub_path = incidents_path, .data = out.items });
 }
 
 fn computePickScore(repo: []const u8, allocator: std.mem.Allocator, content: []const u8, ignore_deps: bool) f64 {
@@ -1670,6 +1753,388 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     return;
 }
 
+fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+    const owner = getOptValue(cmd_args, "--owner") orelse {
+        std.debug.print("allocate-task requires --owner <owner>\n", .{});
+        std.process.exit(2);
+    };
+    const priority_filter = getOptValue(cmd_args, "--priority");
+    if (priority_filter != null and !priorityAllowed(priority_filter.?)) {
+        std.debug.print("invalid priority: {s}\n", .{priority_filter.?});
+        std.process.exit(2);
+    }
+    const type_filter = getOptValue(cmd_args, "--type");
+    if (type_filter != null and !typeAllowed(type_filter.?)) {
+        std.debug.print("invalid type: {s}\n", .{type_filter.?});
+        std.process.exit(2);
+    }
+    const explicit_branch = getOptValue(cmd_args, "--branch");
+    const ignore_deps = hasFlag(cmd_args, "--ignore-deps");
+    const json_out = hasFlag(cmd_args, "--json");
+
+    const max_claimed_raw = getOptValue(cmd_args, "--max-claimed-per-owner") orelse "2";
+    const max_claimed = std.fmt.parseInt(u32, max_claimed_raw, 10) catch {
+        std.debug.print("invalid --max-claimed-per-owner: {s}\n", .{max_claimed_raw});
+        std.process.exit(2);
+    };
+    const lease_minutes_raw = getOptValue(cmd_args, "--lease-minutes") orelse "5";
+    var lease_minutes = std.fmt.parseInt(i64, lease_minutes_raw, 10) catch {
+        std.debug.print("invalid --lease-minutes: {s}\n", .{lease_minutes_raw});
+        std.process.exit(2);
+    };
+    if (lease_minutes < 1) lease_minutes = 1;
+
+    var required_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    defer required_labels.deinit(allocator);
+    var avoid_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    defer avoid_labels.deinit(allocator);
+    var arg_i: usize = 0;
+    while (arg_i < cmd_args.len) : (arg_i += 1) {
+        const a = cmd_args[arg_i];
+        if (std.mem.eql(u8, a, "--label")) {
+            if (arg_i + 1 >= cmd_args.len) {
+                std.debug.print("--label requires a value\n", .{});
+                std.process.exit(2);
+            }
+            try required_labels.append(allocator, cmd_args[arg_i + 1]);
+            arg_i += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--avoid-label")) {
+            if (arg_i + 1 >= cmd_args.len) {
+                std.debug.print("--avoid-label requires a value\n", .{});
+                std.process.exit(2);
+            }
+            try avoid_labels.append(allocator, cmd_args[arg_i + 1]);
+            arg_i += 1;
+            continue;
+        }
+    }
+
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
+    defer allocator.free(tdir);
+    if (!dirExists(tdir)) {
+        std.debug.print("no allocatable tickets found (ready or lease-expired claimed + deps satisfied + filters).\n", .{});
+        std.process.exit(3);
+    }
+
+    const now_ts = std.time.timestamp();
+
+    var claimed_count: u32 = 0;
+    var count_dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
+    defer count_dir.close();
+    var count_it = count_dir.iterate();
+    while (try count_it.next()) |entry| {
+        if (entry.kind != .file or !isTicketFilename(entry.name)) continue;
+        const count_path = try std.fs.path.join(allocator, &[_][]const u8{ tdir, entry.name });
+        defer allocator.free(count_path);
+        const count_content = try std.fs.cwd().readFileAlloc(allocator, count_path, 1024 * 1024);
+        defer allocator.free(count_content);
+
+        const status = parseMetaField(count_content, "status") orelse "";
+        const ticket_owner = parseMetaField(count_content, "owner") orelse "";
+        if (std.mem.eql(u8, status, "claimed") and std.mem.eql(u8, ticket_owner, owner) and !leaseExpired(count_content, now_ts)) {
+            claimed_count += 1;
+        }
+    }
+    if (claimed_count >= max_claimed) {
+        std.debug.print("owner '{s}' already has {d} active leases (max {d}).\n", .{ owner, claimed_count, max_claimed });
+        std.process.exit(2);
+    }
+
+    const Candidate = struct {
+        path: []u8,
+        content: []u8,
+        id: []u8,
+        title: []u8,
+        updated: []u8,
+        score: f64,
+    };
+
+    var best: ?Candidate = null;
+
+    var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
+    defer dir.close();
+    var it = dir.iterate();
+
+    while (try it.next()) |entry| {
+        if (entry.kind != .file or !isTicketFilename(entry.name)) continue;
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ tdir, entry.name });
+        defer allocator.free(path);
+        const content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+        defer allocator.free(content);
+
+        const status = parseMetaField(content, "status") orelse "";
+        if (!std.mem.eql(u8, status, "ready")) {
+            if (!(std.mem.eql(u8, status, "claimed") and leaseExpired(content, now_ts))) {
+                continue;
+            }
+        }
+
+        if (priority_filter) |pf| {
+            const p = parseMetaField(content, "priority") orelse "";
+            if (!std.mem.eql(u8, p, pf)) continue;
+        }
+        if (type_filter) |tf| {
+            const tp = parseMetaField(content, "type") orelse "";
+            if (!std.mem.eql(u8, tp, tf)) continue;
+        }
+
+        var labels_ok = true;
+        for (required_labels.items) |label| {
+            if (!parseListContains(content, "labels", label)) {
+                labels_ok = false;
+                break;
+            }
+        }
+        if (!labels_ok) continue;
+
+        var avoid_hit = false;
+        for (avoid_labels.items) |label| {
+            if (parseListContains(content, "labels", label)) {
+                avoid_hit = true;
+                break;
+            }
+        }
+        if (avoid_hit) continue;
+
+        const score = computePickScore(repo, allocator, content, ignore_deps);
+        if (score <= -1e8) continue;
+
+        const id = parseMetaField(content, "id") orelse entry.name[0..8];
+        const title = parseMetaField(content, "title") orelse "task";
+        const updated = parseMetaField(content, "updated") orelse "";
+
+        const better = if (best == null)
+            true
+        else blk: {
+            const b = best.?;
+            if (score > b.score) break :blk true;
+            if (score < b.score) break :blk false;
+            const upd_cmp = std.mem.order(u8, updated, b.updated);
+            if (upd_cmp == .lt) break :blk true;
+            if (upd_cmp == .gt) break :blk false;
+            break :blk std.mem.order(u8, id, b.id) == .lt;
+        };
+        if (!better) continue;
+
+        if (best) |b| {
+            allocator.free(b.path);
+            allocator.free(b.content);
+            allocator.free(b.id);
+            allocator.free(b.title);
+            allocator.free(b.updated);
+        }
+
+        best = .{
+            .path = try allocator.dupe(u8, path),
+            .content = try allocator.dupe(u8, content),
+            .id = try allocator.dupe(u8, id),
+            .title = try allocator.dupe(u8, title),
+            .updated = try allocator.dupe(u8, updated),
+            .score = score,
+        };
+    }
+
+    if (best == null) {
+        std.debug.print("no allocatable tickets found (ready or lease-expired claimed + deps satisfied + filters).\n", .{});
+        std.process.exit(3);
+    }
+
+    const chosen = best.?;
+    defer {
+        allocator.free(chosen.path);
+        allocator.free(chosen.content);
+        allocator.free(chosen.id);
+        allocator.free(chosen.title);
+        allocator.free(chosen.updated);
+    }
+
+    const chosen_status = parseMetaField(chosen.content, "status") orelse "";
+    const was_stale_reallocation = std.mem.eql(u8, chosen_status, "claimed") and leaseExpired(chosen.content, now_ts);
+    const previous_owner = parseMetaField(chosen.content, "owner") orelse "";
+    const previous_lease = parseMetaField(chosen.content, "lease_expires_at") orelse "";
+
+    const branch = if (explicit_branch) |b| try allocator.dupe(u8, b) else try defaultBranch(allocator, chosen.id, chosen.title);
+    defer allocator.free(branch);
+    const now_iso = try nowUtcIsoTimestamp(allocator);
+    defer allocator.free(now_iso);
+    const lease_until_ts = now_ts + lease_minutes * 60;
+    const lease_days = @divFloor(lease_until_ts, 86400);
+    const lease_secs_of_day = @mod(lease_until_ts, 86400);
+    const lease_civil = civilFromDays(lease_days);
+    const lease_hour: i64 = @divFloor(lease_secs_of_day, 3600);
+    const lease_minute: i64 = @divFloor(@mod(lease_secs_of_day, 3600), 60);
+    const lease_second: i64 = @mod(lease_secs_of_day, 60);
+    const lease_expires_at = try std.fmt.allocPrint(
+        allocator,
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z",
+        .{
+            @as(u32, @intCast(lease_civil.year)),
+            @as(u8, @intCast(lease_civil.month)),
+            @as(u8, @intCast(lease_civil.day)),
+            @as(u8, @intCast(lease_hour)),
+            @as(u8, @intCast(lease_minute)),
+            @as(u8, @intCast(lease_second)),
+        },
+    );
+    defer allocator.free(lease_expires_at);
+
+    const today = try todayIsoDate(allocator);
+    defer allocator.free(today);
+
+    const next1 = try setMetaField(allocator, chosen.content, "status", "claimed");
+    defer allocator.free(next1);
+    const next2 = try setMetaField(allocator, next1, "owner", owner);
+    defer allocator.free(next2);
+    const next3 = try setMetaField(allocator, next2, "branch", branch);
+    defer allocator.free(next3);
+    const next4 = try setMetaField(allocator, next3, "allocated_to", owner);
+    defer allocator.free(next4);
+    const next5 = try setMetaField(allocator, next4, "allocated_at", now_iso);
+    defer allocator.free(next5);
+    const next6 = try setMetaField(allocator, next5, "lease_expires_at", lease_expires_at);
+    defer allocator.free(next6);
+    const next7 = try setMetaField(allocator, next6, "last_attempted_at", now_iso);
+    defer allocator.free(next7);
+    const next8 = try setMetaField(allocator, next7, "updated", today);
+    defer allocator.free(next8);
+    const score_text = try std.fmt.allocPrint(allocator, "{d:.1}", .{chosen.score});
+    defer allocator.free(score_text);
+    const next9 = try setMetaField(allocator, next8, "score", score_text);
+    defer allocator.free(next9);
+    try std.fs.cwd().writeFile(.{ .sub_path = chosen.path, .data = next9 });
+
+    if (was_stale_reallocation) {
+        const incident = try std.fmt.allocPrint(
+            allocator,
+            "stale-lease-reallocation id={s} from_owner={s} to_owner={s} prior_lease_expires_at={s}",
+            .{ chosen.id, previous_owner, owner, previous_lease },
+        );
+        defer allocator.free(incident);
+        try appendIncident(allocator, repo, incident);
+    }
+
+    if (json_out) {
+        try printStdout(
+            allocator,
+            "{{\"ticket_id\":\"{s}\",\"owner\":\"{s}\",\"branch\":\"{s}\",\"lease_expires_at\":\"{s}\",\"score\":{d:.1}}}\n",
+            .{ chosen.id, owner, branch, lease_expires_at, chosen.score },
+        );
+    } else {
+        try printStdout(allocator, "{s}\n", .{chosen.id});
+    }
+}
+
+fn cmdFailTask(allocator: std.mem.Allocator, id: []const u8, err_text: []const u8, retry_limit_opt: ?[]const u8, force: bool) !void {
+    if (!isTicketId(id)) {
+        std.debug.print("invalid ticket id: {s}\n", .{id});
+        std.process.exit(2);
+    }
+
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const path = try ticketPath(allocator, repo, id);
+    defer allocator.free(path);
+    const content = std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024) catch {
+        std.debug.print("ticket not found: {s}\n", .{id});
+        std.process.exit(2);
+    };
+    defer allocator.free(content);
+
+    const status = parseMetaField(content, "status") orelse "";
+    if (!std.mem.eql(u8, status, "claimed") and !force) {
+        std.debug.print("Refusing to fail task: status is '{s}' (expected 'claimed'). Use --force to override.\n", .{status});
+        std.process.exit(2);
+    }
+
+    const prev_retry_count_raw = parseMetaField(content, "retry_count") orelse "0";
+    const prev_retry_count = std.fmt.parseInt(i64, prev_retry_count_raw, 10) catch 0;
+    const retry_count = prev_retry_count + 1;
+
+    const configured_retry_limit_raw = retry_limit_opt orelse (parseMetaField(content, "retry_limit") orelse "3");
+    var configured_retry_limit = std.fmt.parseInt(i64, configured_retry_limit_raw, 10) catch {
+        std.debug.print("invalid --retry-limit: {s}\n", .{configured_retry_limit_raw});
+        std.process.exit(2);
+    };
+    if (configured_retry_limit < 1) configured_retry_limit = 1;
+
+    const retry_count_text = try std.fmt.allocPrint(allocator, "{d}", .{retry_count});
+    defer allocator.free(retry_count_text);
+    const retry_limit_text = try std.fmt.allocPrint(allocator, "{d}", .{configured_retry_limit});
+    defer allocator.free(retry_limit_text);
+    const now_iso = try nowUtcIsoTimestamp(allocator);
+    defer allocator.free(now_iso);
+    const today = try todayIsoDate(allocator);
+    defer allocator.free(today);
+
+    const next1 = try setMetaField(allocator, content, "retry_count", retry_count_text);
+    defer allocator.free(next1);
+    const next2 = try setMetaField(allocator, next1, "retry_limit", retry_limit_text);
+    defer allocator.free(next2);
+    const next3 = try setMetaField(allocator, next2, "last_error", std.mem.trim(u8, err_text, " \t\r\n"));
+    defer allocator.free(next3);
+    const next4 = try setMetaField(allocator, next3, "last_attempted_at", now_iso);
+    defer allocator.free(next4);
+    const next5 = try setMetaField(allocator, next4, "updated", today);
+    defer allocator.free(next5);
+
+    if (retry_count >= configured_retry_limit) {
+        const blocked1 = try setMetaField(allocator, next5, "status", "blocked");
+        defer allocator.free(blocked1);
+        const blocked2 = try setMetaField(allocator, blocked1, "owner", "null");
+        defer allocator.free(blocked2);
+        const blocked3 = try setMetaField(allocator, blocked2, "branch", "null");
+        defer allocator.free(blocked3);
+        const blocked4 = try setMetaField(allocator, blocked3, "allocated_to", "null");
+        defer allocator.free(blocked4);
+        const blocked5 = try setMetaField(allocator, blocked4, "allocated_at", "null");
+        defer allocator.free(blocked5);
+        const blocked6 = try setMetaField(allocator, blocked5, "lease_expires_at", "null");
+        defer allocator.free(blocked6);
+        try std.fs.cwd().writeFile(.{ .sub_path = path, .data = blocked6 });
+
+        const errors_dir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets", "errors" });
+        defer allocator.free(errors_dir);
+        if (!dirExists(errors_dir)) try std.fs.cwd().makePath(errors_dir);
+
+        const error_path = try errorTicketPath(allocator, repo, id);
+        defer allocator.free(error_path);
+        if (fileExists(error_path)) {
+            std.debug.print("Refusing to move to errors: destination already exists: {s}\n", .{error_path});
+            std.process.exit(2);
+        }
+
+        try std.fs.cwd().rename(path, error_path);
+        const incident = try std.fmt.allocPrint(
+            allocator,
+            "retry-limit-exhausted id={s} retries={d} moved_to=tickets/errors",
+            .{ id, retry_count },
+        );
+        defer allocator.free(incident);
+        try appendIncident(allocator, repo, incident);
+        try printStdout(allocator, "{s} exceeded retry_limit ({d}) -> moved to tickets/errors/{s}.md\n", .{ id, configured_retry_limit, id });
+        return;
+    }
+
+    const ready1 = try setMetaField(allocator, next5, "status", "ready");
+    defer allocator.free(ready1);
+    const ready2 = try setMetaField(allocator, ready1, "owner", "null");
+    defer allocator.free(ready2);
+    const ready3 = try setMetaField(allocator, ready2, "branch", "null");
+    defer allocator.free(ready3);
+    const ready4 = try setMetaField(allocator, ready3, "allocated_to", "null");
+    defer allocator.free(ready4);
+    const ready5 = try setMetaField(allocator, ready4, "allocated_at", "null");
+    defer allocator.free(ready5);
+    const ready6 = try setMetaField(allocator, ready5, "lease_expires_at", "null");
+    defer allocator.free(ready6);
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = ready6 });
+    try printStdout(allocator, "{s} re-queued for retry ({d}/{d})\n", .{ id, retry_count, configured_retry_limit });
+}
+
 fn cmdGraph(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     const mermaid = hasFlag(cmd_args, "--mermaid");
     const open_only = hasFlag(cmd_args, "--open-only");
@@ -1994,7 +2459,7 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         seen_paths.deinit();
     }
 
-    const roots = [_][]const u8{ "tickets", "tickets/archive", "tickets/backlogs" };
+    const roots = [_][]const u8{ "tickets", "tickets/archive", "tickets/errors", "tickets/backlogs" };
     for (roots) |root_rel| {
         const root = try std.fs.path.join(allocator, &[_][]const u8{ repo, root_rel });
         defer allocator.free(root);
@@ -2033,7 +2498,7 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 .depends_on = try allocator.dupe(u8, parseMetaField(content, "depends_on") orelse "[]"),
                 .labels = try allocator.dupe(u8, parseMetaField(content, "labels") orelse "[]"),
                 .tags = try allocator.dupe(u8, parseMetaField(content, "tags") orelse "[]"),
-                .bucket = try allocator.dupe(u8, if (std.mem.eql(u8, root_rel, "tickets/archive")) "archive" else if (std.mem.eql(u8, root_rel, "tickets/backlogs")) "backlogs" else "tickets"),
+                .bucket = try allocator.dupe(u8, if (std.mem.eql(u8, root_rel, "tickets/archive")) "archive" else if (std.mem.eql(u8, root_rel, "tickets/errors")) "errors" else if (std.mem.eql(u8, root_rel, "tickets/backlogs")) "backlogs" else "tickets"),
                 .is_archived = if (std.mem.eql(u8, root_rel, "tickets/archive")) 1 else 0,
                 .path = try allocator.dupe(u8, rel),
                 .body = try allocator.dupe(u8, content),
@@ -2371,6 +2836,18 @@ pub fn main() !void {
             try cmdShow(allocator, args[2]);
         },
         .pick => try cmdPick(allocator, args[2..]),
+        .allocate_task => try cmdAllocateTask(allocator, args[2..]),
+        .fail_task => {
+            if (args.len < 3) {
+                std.debug.print("usage: mt-zig fail-task <id> --error <text> [--retry-limit <n>] [--force]\n", .{});
+                std.process.exit(2);
+            }
+            const err_text = getOptValue(args[3..], "--error") orelse {
+                std.debug.print("fail-task requires --error <text>\n", .{});
+                std.process.exit(2);
+            };
+            try cmdFailTask(allocator, args[2], err_text, getOptValue(args[3..], "--retry-limit"), hasFlag(args[3..], "--force"));
+        },
         .claim => {
             if (args.len < 4) {
                 std.debug.print("usage: mt-zig claim <id> --owner <owner> [--branch <name>] [--force] [--ignore-deps]\n", .{});

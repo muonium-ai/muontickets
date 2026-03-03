@@ -74,14 +74,34 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py claim T-000123 --owner a
 # Allocate one task for an agent (default lease: 5 minutes)
 uv run python3 tickets/mt/muontickets/muontickets/mt.py allocate-task --owner agent-1
 
-# Allocate with role/skill profile routing
-uv run python3 tickets/mt/muontickets/muontickets/mt.py allocate-task --owner agent-1 --skill design
-uv run python3 tickets/mt/muontickets/muontickets/mt.py allocate-task --owner agent-2 --role devops
+# Allocate with filters
+uv run python3 tickets/mt/muontickets/muontickets/mt.py allocate-task --owner agent-1 --priority p0 --type code --label backend
 
 # Report failed attempt (increments retry_count and re-queues)
 uv run python3 tickets/mt/muontickets/muontickets/mt.py fail-task T-000123 --error "build failed"
 
 # On retry-limit exhaustion, ticket is moved to tickets/errors/ for manual resolution
+```
+
+### Queue operator procedure
+
+```bash
+# 1) Allocate work
+uv run python3 tickets/mt/muontickets/muontickets/mt.py allocate-task --owner agent-1
+
+# 2) While executing, post progress
+uv run python3 tickets/mt/muontickets/muontickets/mt.py comment T-000123 "step completed"
+
+# 3a) Success path
+uv run python3 tickets/mt/muontickets/muontickets/mt.py set-status T-000123 needs_review
+uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000123
+
+# 3b) Failure path (retry)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py fail-task T-000123 --error "test failure"
+
+# 4) Triage exhausted retries
+uv run python3 tickets/mt/muontickets/muontickets/mt.py ls --status blocked
+uv run python3 tickets/mt/muontickets/muontickets/mt.py report --search T-000123
 ```
 
 ### Comment progress
