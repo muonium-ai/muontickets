@@ -1,0 +1,66 @@
+{
+  "name": "queue_allocate_fail",
+  "description": "Exercises queue allocation and fail-task retry/escalation behavior for Python baseline.",
+  "steps": [
+    {
+      "name": "init board",
+      "args": ["init"],
+      "expect_exit": 0,
+      "expect_output_contains": ["created"]
+    },
+    {
+      "name": "create queue ticket",
+      "args": ["new", "Queue Retry Ticket"],
+      "expect_exit": 0,
+      "expect_output_contains": ["T-000002.md"]
+    },
+    {
+      "name": "allocate first lease",
+      "args": ["allocate-task", "--owner", "agent-q", "--json"],
+      "expect_exit": 0,
+      "expect_output_contains": ["ticket_id", "T-000002", "lease_expires_at"]
+    },
+    {
+      "name": "first failure requeue",
+      "args": ["fail-task", "T-000002", "--error", "attempt-1", "--retry-limit", "3"],
+      "expect_exit": 0,
+      "expect_output_contains": ["re-queued", "1/3"]
+    },
+    {
+      "name": "allocate second lease",
+      "args": ["allocate-task", "--owner", "agent-q", "--json"],
+      "expect_exit": 0,
+      "expect_output_contains": ["ticket_id", "T-000002"]
+    },
+    {
+      "name": "second failure requeue",
+      "args": ["fail-task", "T-000002", "--error", "attempt-2", "--retry-limit", "3"],
+      "expect_exit": 0,
+      "expect_output_contains": ["re-queued", "2/3"]
+    },
+    {
+      "name": "allocate third lease",
+      "args": ["allocate-task", "--owner", "agent-q", "--json"],
+      "expect_exit": 0,
+      "expect_output_contains": ["ticket_id", "T-000002"]
+    },
+    {
+      "name": "third failure moves to errors",
+      "args": ["fail-task", "T-000002", "--error", "attempt-3", "--retry-limit", "3"],
+      "expect_exit": 0,
+      "expect_output_contains": ["moved to tickets/errors/T-000002.md"]
+    },
+    {
+      "name": "allocate no candidate",
+      "args": ["allocate-task", "--owner", "agent-q", "--label", "queue"],
+      "expect_exit": 3,
+      "expect_stderr_contains": ["no allocatable tickets found"]
+    },
+    {
+      "name": "report includes errors bucket path",
+      "args": ["report", "--search", "T-000002", "--limit", "5"],
+      "expect_exit": 0,
+      "expect_output_contains": ["Search results for", "tickets/errors/T-000002.md"]
+    }
+  ]
+}

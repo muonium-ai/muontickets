@@ -12,6 +12,7 @@ test-conformance:
 		tests.test_conformance_runner.ConformanceRunnerTests.test_reporting_graph_pick_fixture \
 		tests.test_conformance_runner.ConformanceRunnerTests.test_options_parity_fixture \
 		tests.test_conformance_runner.ConformanceRunnerTests.test_pick_scoring_fixture \
+		tests.test_conformance_runner.ConformanceRunnerTests.test_queue_allocate_fail_fixture \
 		tests.test_conformance_runner.ConformanceRunnerTests.test_zig_reporting_graph_pick_fixture \
 		tests.test_conformance_runner.ConformanceRunnerTests.test_zig_options_parity_fixture \
 		tests.test_conformance_runner.ConformanceRunnerTests.test_zig_pick_scoring_fixture \

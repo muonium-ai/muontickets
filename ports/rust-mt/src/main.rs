@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
@@ -72,6 +73,28 @@ enum Commands {
         ignore_deps: bool,
         #[arg(long = "max-claimed-per-owner", default_value_t = 2)]
         max_claimed_per_owner: i32,
+        #[arg(long)]
+        json: bool,
+    },
+    AllocateTask {
+        #[arg(long)]
+        owner: String,
+        #[arg(long)]
+        label: Vec<String>,
+        #[arg(long = "avoid-label")]
+        avoid_label: Vec<String>,
+        #[arg(long)]
+        priority: Option<String>,
+        #[arg(long = "type")]
+        ticket_type: Option<String>,
+        #[arg(long, default_value = "")]
+        branch: String,
+        #[arg(long = "ignore-deps")]
+        ignore_deps: bool,
+        #[arg(long = "max-claimed-per-owner", default_value_t = 2)]
+        max_claimed_per_owner: i32,
+        #[arg(long, default_value_t = 5)]
+        lease_minutes: i64,
         #[arg(long)]
         json: bool,
     },
@@ -191,6 +214,10 @@ fn tickets_dir(repo_root: &Path) -> PathBuf {
 
 fn archive_dir(repo_root: &Path) -> PathBuf {
     repo_root.join("tickets").join("archive")
+}
+
+fn incidents_log_path(repo_root: &Path) -> PathBuf {
+    tickets_dir(repo_root).join("incidents.log")
 }
 
 fn backlogs_dir(repo_root: &Path) -> PathBuf {
@@ -545,6 +572,61 @@ fn normalize_meta(meta: &mut Mapping) {
     if !meta.contains_key(Value::String("tags".to_string())) {
         map_set_string_array(meta, "tags", Vec::new());
     }
+    if !meta.contains_key(Value::String("retry_count".to_string())) {
+        meta.insert(
+            Value::String("retry_count".to_string()),
+            Value::Number(serde_yaml::Number::from(0)),
+        );
+    }
+    if !meta.contains_key(Value::String("retry_limit".to_string())) {
+        meta.insert(
+            Value::String("retry_limit".to_string()),
+            Value::Number(serde_yaml::Number::from(3)),
+        );
+    }
+    if !meta.contains_key(Value::String("allocated_to".to_string())) {
+        map_set_optional_string(meta, "allocated_to", None);
+    }
+    if !meta.contains_key(Value::String("allocated_at".to_string())) {
+        map_set_optional_string(meta, "allocated_at", None);
+    }
+    if !meta.contains_key(Value::String("lease_expires_at".to_string())) {
+        map_set_optional_string(meta, "lease_expires_at", None);
+    }
+    if !meta.contains_key(Value::String("last_error".to_string())) {
+        map_set_optional_string(meta, "last_error", None);
+    }
+    if !meta.contains_key(Value::String("last_attempted_at".to_string())) {
+        map_set_optional_string(meta, "last_attempted_at", None);
+    }
+}
+
+fn now_utc_iso() -> String {
+    Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+fn lease_expired(meta: &Mapping, now: chrono::DateTime<Utc>) -> bool {
+    let Some(raw) = map_get_string(meta, "lease_expires_at") else {
+        return false;
+    };
+    if raw.trim().is_empty() {
+        return false;
+    }
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(raw.trim()) else {
+        return false;
+    };
+    now >= parsed.with_timezone(&Utc)
+}
+
+fn append_incident(repo_root: &Path, message: &str) -> Result<()> {
+    fs::create_dir_all(tickets_dir(repo_root))?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(incidents_log_path(repo_root))?;
+    use std::io::Write;
+    writeln!(file, "{} {}", now_utc_iso(), message)?;
+    Ok(())
 }
 
 fn ticket_summary(meta: &Mapping) -> String {
@@ -1372,6 +1454,174 @@ fn cmd_pick(
     Ok(0)
 }
 
+fn cmd_allocate_task(
+    owner: String,
+    label: Vec<String>,
+    avoid_label: Vec<String>,
+    priority: Option<String>,
+    ticket_type: Option<String>,
+    branch: String,
+    ignore_deps: bool,
+    max_claimed_per_owner: i32,
+    lease_minutes: i64,
+    as_json: bool,
+) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let mut tickets = Vec::new();
+
+    for path in iter_ticket_files(&tickets_dir(&repo))? {
+        let (mut meta, _body) = match read_ticket(&path) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        normalize_meta(&mut meta);
+        tickets.push((path, meta));
+    }
+
+    let mut id_to_meta = BTreeMap::new();
+    for (_path, meta) in &tickets {
+        if let Some(ticket_id) = map_get_string(meta, "id") {
+            id_to_meta.insert(ticket_id, meta.clone());
+        }
+    }
+
+    let now = Utc::now();
+    let claimed_count = id_to_meta
+        .values()
+        .filter(|meta| {
+            map_get_status(meta) == "claimed"
+                && map_get_string(meta, "owner").unwrap_or_default() == owner
+                && !lease_expired(meta, now)
+        })
+        .count() as i32;
+    if claimed_count >= max_claimed_per_owner {
+        eprintln!(
+            "owner {owner:?} already has {claimed_count} active leases (max {max_claimed_per_owner})."
+        );
+        return Ok(2);
+    }
+
+    let mut candidates: Vec<(f64, String, String, PathBuf)> = Vec::new();
+    for (path, meta) in &tickets {
+        let status = map_get_status(meta);
+        if status == "ready" {
+        } else if status == "claimed" {
+            if !lease_expired(meta, now) {
+                continue;
+            }
+        } else {
+            continue;
+        }
+
+        if let Some(ref wanted_priority) = priority {
+            if map_get_string(meta, "priority").unwrap_or_default() != *wanted_priority {
+                continue;
+            }
+        }
+        if let Some(ref wanted_type) = ticket_type {
+            if map_get_string(meta, "type").unwrap_or_default() != *wanted_type {
+                continue;
+            }
+        }
+
+        let labels = map_get_string_array(meta, "labels");
+        let label_set = labels.iter().cloned().collect::<BTreeSet<_>>();
+        if !label.is_empty() && !label.iter().all(|item| label_set.contains(item)) {
+            continue;
+        }
+        if !avoid_label.is_empty() && avoid_label.iter().any(|item| label_set.contains(item)) {
+            continue;
+        }
+
+        let (deps_ok, _) = deps_satisfied(meta, &id_to_meta);
+        if !deps_ok && !ignore_deps {
+            continue;
+        }
+
+        let score = compute_score(meta, &id_to_meta);
+        let updated = map_get_string(meta, "updated").unwrap_or_default();
+        let ticket_id = map_get_string(meta, "id").unwrap_or_default();
+        candidates.push((score, updated, ticket_id, path.clone()));
+    }
+
+    if candidates.is_empty() {
+        eprintln!("no allocatable tickets found (ready or lease-expired claimed + deps satisfied + filters).");
+        return Ok(3);
+    }
+
+    candidates.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+
+    let (score, _updated, ticket_id, path) = candidates[0].clone();
+    let (mut meta, body) = read_ticket(&path)?;
+    normalize_meta(&mut meta);
+
+    let previous_owner = map_get_string(&meta, "owner").unwrap_or_default();
+    let previous_lease = map_get_string(&meta, "lease_expires_at").unwrap_or_default();
+    let stale_reallocation = map_get_status(&meta) == "claimed" && lease_expired(&meta, now);
+
+    let effective_lease_minutes = lease_minutes.max(1);
+    let lease_until = now + chrono::Duration::minutes(effective_lease_minutes);
+
+    map_set_string(&mut meta, "status", "claimed");
+    map_set_string(&mut meta, "owner", &owner);
+    map_set_string(&mut meta, "allocated_to", &owner);
+    map_set_string(&mut meta, "allocated_at", &now_utc_iso());
+    map_set_string(
+        &mut meta,
+        "lease_expires_at",
+        &lease_until.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    );
+    map_set_string(&mut meta, "last_attempted_at", &now_utc_iso());
+    map_set_string(&mut meta, "updated", &today_str());
+    let chosen_branch = if branch.trim().is_empty() {
+        _default_branch(&meta)
+    } else {
+        branch.trim().to_string()
+    };
+    map_set_string(&mut meta, "branch", &chosen_branch);
+    meta.insert(
+        Value::String("score".to_string()),
+        Value::Number(serde_yaml::Number::from(score as i64)),
+    );
+
+    write_ticket(&path, &meta, &body)?;
+
+    if stale_reallocation {
+        append_incident(
+            &repo,
+            &format!(
+                "stale-lease-reallocation id={} from_owner={} to_owner={} prior_lease_expires_at={}",
+                ticket_id, previous_owner, owner, previous_lease
+            ),
+        )?;
+    }
+
+    if as_json {
+        println!(
+            "{}",
+            json!({
+                "ticket_id": ticket_id,
+                "owner": owner,
+                "branch": chosen_branch,
+                "lease_expires_at": map_get_string(&meta, "lease_expires_at").unwrap_or_default(),
+                "score": score,
+            })
+        );
+    } else {
+        println!("{}", ticket_id);
+    }
+
+    Ok(0)
+}
+
 fn cmd_graph(mermaid: bool, open_only: bool) -> Result<i32> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let repo = find_repo_root(&cwd);
@@ -1737,6 +1987,29 @@ fn run() -> Result<i32> {
             branch,
             ignore_deps,
             max_claimed_per_owner,
+            json,
+        ),
+        Commands::AllocateTask {
+            owner,
+            label,
+            avoid_label,
+            priority,
+            ticket_type,
+            branch,
+            ignore_deps,
+            max_claimed_per_owner,
+            lease_minutes,
+            json,
+        } => cmd_allocate_task(
+            owner,
+            label,
+            avoid_label,
+            priority,
+            ticket_type,
+            branch,
+            ignore_deps,
+            max_claimed_per_owner,
+            lease_minutes,
             json,
         ),
         Commands::Claim {

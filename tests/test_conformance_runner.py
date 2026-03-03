@@ -92,6 +92,11 @@ class ConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
+    def test_queue_allocate_fail_fixture(self) -> None:
+        proc = self.run_fixture("queue_allocate_fail.json")
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
     def test_zig_reporting_graph_pick_fixture(self) -> None:
         zig_bin = self.get_zig_bin()
 
