@@ -126,6 +126,12 @@ fn dirExists(path: []const u8) bool {
     return true;
 }
 
+fn printStdout(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
+    const message = try std.fmt.allocPrint(allocator, fmt, args);
+    defer allocator.free(message);
+    try std.fs.File.stdout().writeAll(message);
+}
+
 fn isTicketId(id: []const u8) bool {
     if (id.len != 8) return false;
     if (!std.mem.eql(u8, id[0..2], "T-")) return false;
@@ -196,8 +202,8 @@ fn writeLastTicketNumber(allocator: std.mem.Allocator, repo: []const u8, number:
 }
 
 fn scanMaxTicketNumber(allocator: std.mem.Allocator, repo: []const u8) !u32 {
+    const roots = [_][]const u8{ "tickets", "tickets/archive" };
     var max_num: u32 = 0;
-    const roots = [_][]const u8{ "tickets", "tickets/archive", "tickets/backlogs" };
 
     for (roots) |root_rel| {
         const root = try std.fs.path.join(allocator, &[_][]const u8{ repo, root_rel });
@@ -286,16 +292,16 @@ fn cmdInit(allocator: std.mem.Allocator) !void {
 
     if (!dirExists(tickets_dir)) {
         try std.fs.cwd().makePath(tickets_dir);
-        std.debug.print("created {s}\n", .{tickets_dir});
+        try printStdout(allocator, "created {s}\n", .{tickets_dir});
     } else {
-        std.debug.print("tickets dir exists: {s}\n", .{tickets_dir});
+        try printStdout(allocator, "tickets dir exists: {s}\n", .{tickets_dir});
     }
 
     const template_path = try std.fs.path.join(allocator, &[_][]const u8{ tickets_dir, "ticket.template" });
     defer allocator.free(template_path);
     if (!fileExists(template_path)) {
         try std.fs.cwd().writeFile(.{ .sub_path = template_path, .data = default_template });
-        std.debug.print("created {s}\n", .{template_path});
+        try printStdout(allocator, "created {s}\n", .{template_path});
     }
 
     const active_count = try countActiveTicketFiles(allocator, repo);
@@ -307,13 +313,13 @@ fn cmdInit(allocator: std.mem.Allocator) !void {
         const ticket_path = try std.fs.path.join(allocator, &[_][]const u8{ tickets_dir, fname });
         defer allocator.free(ticket_path);
         try writeTicketFile(allocator, ticket_path, tid, "Example: replace this ticket", "ready", "p2", "chore", "xs", "[example]", example_body);
-        std.debug.print("created example ticket {s}\n", .{tid});
+        try printStdout(allocator, "created example ticket {s}\n", .{tid});
     } else {
         const tracked = try readLastTicketNumber(allocator, repo);
         const scanned = try scanMaxTicketNumber(allocator, repo);
         if (tracked == null or tracked.? < scanned) {
             try writeLastTicketNumber(allocator, repo, scanned);
-            std.debug.print("updated tickets/last_ticket_id to T-{d:0>6}\n", .{scanned});
+            try printStdout(allocator, "updated tickets/last_ticket_id to T-{d:0>6}\n", .{scanned});
         }
     }
 }
@@ -571,7 +577,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(with_updated);
     try std.fs.cwd().writeFile(.{ .sub_path = ticket_path, .data = with_updated });
 
-    std.debug.print("{s}\n", .{ticket_path});
+    try printStdout(allocator, "{s}\n", .{ticket_path});
 }
 
 fn frontmatterBody(content: []const u8) []const u8 {
@@ -672,7 +678,16 @@ fn bodyExcerptFirstLines(allocator: std.mem.Allocator, body: []const u8, max_lin
 fn listJsonFromRaw(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     var vals = try listItems(allocator, raw);
     defer freeListItems(allocator, &vals);
-    return try listLiteral(allocator, @as([]const []const u8, @ptrCast(vals.items)));
+
+    var out = try std.ArrayList(u8).initCapacity(allocator, raw.len + 8);
+    errdefer out.deinit(allocator);
+    try out.append(allocator, '[');
+    for (vals.items, 0..) |v, idx| {
+        if (idx > 0) try out.appendSlice(allocator, ", ");
+        try appendJsonString(allocator, &out, v);
+    }
+    try out.append(allocator, ']');
+    return out.toOwnedSlice(allocator);
 }
 
 fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
@@ -1046,7 +1061,7 @@ fn cmdClaim(allocator: std.mem.Allocator, id: []const u8, owner: []const u8, bra
     const next3 = try setMetaField(allocator, next2, "branch", branch);
     defer allocator.free(next3);
     try std.fs.cwd().writeFile(.{ .sub_path = path, .data = next3 });
-    std.debug.print("claimed {s} as {s} (branch: {s})\n", .{ id, owner, branch });
+    try printStdout(allocator, "claimed {s} as {s} (branch: {s})\n", .{ id, owner, branch });
 }
 
 fn cmdSetStatus(allocator: std.mem.Allocator, id: []const u8, new_status: []const u8, force: bool, clear_owner: bool) !void {
@@ -1092,7 +1107,7 @@ fn cmdSetStatus(allocator: std.mem.Allocator, id: []const u8, new_status: []cons
     defer allocator.free(final_text);
 
     try std.fs.cwd().writeFile(.{ .sub_path = path, .data = final_text });
-    std.debug.print("{s}: {s} -> {s}\n", .{ id, old, new_status });
+    try printStdout(allocator, "{s}: {s} -> {s}\n", .{ id, old, new_status });
 }
 
 fn cmdDone(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
@@ -1117,7 +1132,7 @@ fn cmdDone(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
     const next = try setMetaField(allocator, content, "status", "done");
     defer allocator.free(next);
     try std.fs.cwd().writeFile(.{ .sub_path = path, .data = next });
-    std.debug.print("done {s}\n", .{id});
+    try printStdout(allocator, "done {s}\n", .{id});
 }
 
 fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
@@ -1146,7 +1161,10 @@ fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
     const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
     defer allocator.free(tdir);
     var dependents = try std.ArrayList([]const u8).initCapacity(allocator, 8);
-    defer dependents.deinit(allocator);
+    defer {
+        for (dependents.items) |dep| allocator.free(dep);
+        dependents.deinit(allocator);
+    }
     var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
     defer dir.close();
     var it = dir.iterate();
@@ -1159,7 +1177,7 @@ fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
         defer allocator.free(tcontent);
         if (parseListContains(tcontent, "depends_on", id)) {
             const dep_id = parseMetaField(tcontent, "id") orelse entry.name[0..8];
-            try dependents.append(allocator, dep_id);
+            try dependents.append(allocator, try allocator.dupe(u8, dep_id));
         }
     }
 
@@ -1192,7 +1210,7 @@ fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
     try std.fs.cwd().rename(src, dst);
     const rel = try std.fmt.allocPrint(allocator, "tickets/archive/{s}.md", .{id});
     defer allocator.free(rel);
-    std.debug.print("archived {s} -> {s}\n", .{ id, rel });
+    try printStdout(allocator, "archived {s} -> {s}\n", .{ id, rel });
 }
 
 fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
@@ -1208,7 +1226,7 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
     defer allocator.free(tdir);
     if (!dirExists(tdir)) {
-        std.debug.print("MuonTickets validation OK.\n", .{});
+        try printStdout(allocator, "MuonTickets validation OK.\n", .{});
         return;
     }
 
@@ -1416,7 +1434,7 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         }
         std.process.exit(1);
     }
-    std.debug.print("MuonTickets validation OK.\n", .{});
+    try printStdout(allocator, "MuonTickets validation OK.\n", .{});
 }
 
 fn cmdComment(allocator: std.mem.Allocator, id: []const u8, text: []const u8) !void {
@@ -1645,9 +1663,9 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     try std.fs.cwd().writeFile(.{ .sub_path = chosen.path, .data = next4 });
 
     if (json_out) {
-        std.debug.print("{{\"picked\":\"{s}\",\"owner\":\"{s}\",\"branch\":\"{s}\",\"score\":{d:.1}}}\n", .{ chosen.id, owner, branch, chosen.score });
+        try printStdout(allocator, "{{\"picked\":\"{s}\",\"owner\":\"{s}\",\"branch\":\"{s}\",\"score\":{d:.1}}}\n", .{ chosen.id, owner, branch, chosen.score });
     } else {
-        std.debug.print("picked {s} (score {d:.1}) -> claimed as {s} (branch: {s})\n", .{ chosen.id, chosen.score, owner, branch });
+        try printStdout(allocator, "picked {s} (score {d:.1}) -> claimed as {s} (branch: {s})\n", .{ chosen.id, chosen.score, owner, branch });
     }
     return;
 }
@@ -1663,8 +1681,8 @@ fn cmdGraph(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     if (!dirExists(tdir)) return;
 
     if (mermaid) {
-        std.debug.print("```mermaid\n", .{});
-        std.debug.print("graph TD\n", .{});
+        try printStdout(allocator, "```mermaid\n", .{});
+        try printStdout(allocator, "graph TD\n", .{});
     }
 
     var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
@@ -1684,14 +1702,14 @@ fn cmdGraph(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         defer freeListItems(allocator, &deps);
         for (deps.items) |dep| {
             if (mermaid) {
-                std.debug.print("  {s} --> {s}\n", .{ dep, id });
+                try printStdout(allocator, "  {s} --> {s}\n", .{ dep, id });
             } else {
-                std.debug.print("{s} -> {s}\n", .{ dep, id });
+                try printStdout(allocator, "{s} -> {s}\n", .{ dep, id });
             }
         }
     }
 
-    if (mermaid) std.debug.print("```\n", .{});
+    if (mermaid) try printStdout(allocator, "```\n", .{});
 }
 
 fn cmdExport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
@@ -1706,11 +1724,11 @@ fn cmdExport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
     defer allocator.free(tdir);
     if (!dirExists(tdir)) {
-        std.debug.print("[]\n", .{});
+        try printStdout(allocator, "[]\n", .{});
         return;
     }
 
-    if (std.mem.eql(u8, format, "json")) std.debug.print("[\n", .{});
+    if (std.mem.eql(u8, format, "json")) try printStdout(allocator, "[\n", .{});
     var first = true;
     var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
     defer dir.close();
@@ -1750,55 +1768,55 @@ fn cmdExport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         var line = try std.ArrayList(u8).initCapacity(allocator, 512);
         defer line.deinit(allocator);
         try line.append(allocator, '{');
-        try line.appendSlice(allocator, "\"id\":");
+        try line.appendSlice(allocator, "\"id\": ");
         try appendJsonString(allocator, &line, id);
-        try line.appendSlice(allocator, ",\"title\":");
+        try line.appendSlice(allocator, ", \"title\": ");
         try appendJsonString(allocator, &line, title);
-        try line.appendSlice(allocator, ",\"status\":");
+        try line.appendSlice(allocator, ", \"status\": ");
         try appendJsonString(allocator, &line, status);
-        try line.appendSlice(allocator, ",\"priority\":");
+        try line.appendSlice(allocator, ", \"priority\": ");
         try appendJsonString(allocator, &line, priority);
-        try line.appendSlice(allocator, ",\"type\":");
+        try line.appendSlice(allocator, ", \"type\": ");
         try appendJsonString(allocator, &line, tp);
-        try line.appendSlice(allocator, ",\"effort\":");
+        try line.appendSlice(allocator, ", \"effort\": ");
         try appendJsonString(allocator, &line, effort);
-        try line.appendSlice(allocator, ",\"labels\":");
+        try line.appendSlice(allocator, ", \"labels\": ");
         try line.appendSlice(allocator, labels_json);
-        try line.appendSlice(allocator, ",\"tags\":");
+        try line.appendSlice(allocator, ", \"tags\": ");
         try line.appendSlice(allocator, tags_json);
-        try line.appendSlice(allocator, ",\"owner\":");
+        try line.appendSlice(allocator, ", \"owner\": ");
         if (std.mem.eql(u8, owner, "null")) {
             try line.appendSlice(allocator, "null");
         } else {
             try appendJsonString(allocator, &line, owner);
         }
-        try line.appendSlice(allocator, ",\"created\":");
+        try line.appendSlice(allocator, ", \"created\": ");
         try appendJsonString(allocator, &line, created);
-        try line.appendSlice(allocator, ",\"updated\":");
+        try line.appendSlice(allocator, ", \"updated\": ");
         try appendJsonString(allocator, &line, updated);
-        try line.appendSlice(allocator, ",\"depends_on\":");
+        try line.appendSlice(allocator, ", \"depends_on\": ");
         try line.appendSlice(allocator, depends_json);
-        try line.appendSlice(allocator, ",\"branch\":");
+        try line.appendSlice(allocator, ", \"branch\": ");
         if (std.mem.eql(u8, branch, "null")) {
             try line.appendSlice(allocator, "null");
         } else {
             try appendJsonString(allocator, &line, branch);
         }
-        try line.appendSlice(allocator, ",\"excerpt\":");
+        try line.appendSlice(allocator, ", \"excerpt\": ");
         try appendJsonString(allocator, &line, excerpt);
-        try line.appendSlice(allocator, ",\"path\":");
+        try line.appendSlice(allocator, ", \"path\": ");
         try appendJsonString(allocator, &line, rel_path);
         try line.append(allocator, '}');
 
         if (std.mem.eql(u8, format, "json")) {
-            if (!first) std.debug.print(",\n", .{});
+            if (!first) try printStdout(allocator, ",\n", .{});
             first = false;
-            std.debug.print("  {s}", .{line.items});
+            try printStdout(allocator, "  {s}", .{line.items});
         } else {
-            std.debug.print("{s}\n", .{line.items});
+            try printStdout(allocator, "{s}\n", .{line.items});
         }
     }
-    if (std.mem.eql(u8, format, "json")) std.debug.print("\n]\n", .{});
+    if (std.mem.eql(u8, format, "json")) try printStdout(allocator, "\n]\n", .{});
 }
 
 fn cmdStats(allocator: std.mem.Allocator) !void {
@@ -2103,11 +2121,11 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         try sqliteCheck(db, c.sqlite3_step(stmt), "insert row");
     }
 
-    std.debug.print("report db: {s}\n", .{db_path});
-    std.debug.print("indexed tickets: {d}\n", .{rows.items.len});
+    try printStdout(allocator, "report db: {s}\n", .{db_path});
+    try printStdout(allocator, "indexed tickets: {d}\n", .{rows.items.len});
 
     if (summary) {
-        std.debug.print("\nBy status:\n", .{});
+        try printStdout(allocator, "\nBy status:\n", .{});
         const by_status_sql = "SELECT COALESCE(status, '<none>'), COUNT(*) FROM tickets GROUP BY status ORDER BY COUNT(*) DESC;";
         const by_status_sql_z = try allocator.dupeZ(u8, by_status_sql);
         defer allocator.free(by_status_sql_z);
@@ -2121,10 +2139,10 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             const status_ptr = c.sqlite3_column_text(status_stmt, 0);
             const count = c.sqlite3_column_int(status_stmt, 1);
             const status_text: []const u8 = if (status_ptr != null) std.mem.span(status_ptr) else "<none>";
-            std.debug.print("  {s:<12} {d}\n", .{ status_text, count });
+            try printStdout(allocator, "  {s:<12} {d}\n", .{ status_text, count });
         }
 
-        std.debug.print("\nBy priority:\n", .{});
+        try printStdout(allocator, "\nBy priority:\n", .{});
         const by_priority_sql = "SELECT COALESCE(priority, '<none>'), COUNT(*) FROM tickets GROUP BY priority ORDER BY COUNT(*) DESC;";
         const by_priority_sql_z = try allocator.dupeZ(u8, by_priority_sql);
         defer allocator.free(by_priority_sql_z);
@@ -2138,10 +2156,10 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             const priority_ptr = c.sqlite3_column_text(priority_stmt, 0);
             const count = c.sqlite3_column_int(priority_stmt, 1);
             const priority_text: []const u8 = if (priority_ptr != null) std.mem.span(priority_ptr) else "<none>";
-            std.debug.print("  {s:<8} {d}\n", .{ priority_text, count });
+            try printStdout(allocator, "  {s:<8} {d}\n", .{ priority_text, count });
         }
 
-        std.debug.print("\nCompleted by owner:\n", .{});
+        try printStdout(allocator, "\nCompleted by owner:\n", .{});
         const by_owner_sql =
             "SELECT COALESCE(NULLIF(owner, ''), '<unowned>'), COUNT(*) " ++
             "FROM tickets WHERE status = 'done' GROUP BY owner ORDER BY COUNT(*) DESC;";
@@ -2157,12 +2175,12 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             const owner_ptr = c.sqlite3_column_text(owner_stmt, 0);
             const count = c.sqlite3_column_int(owner_stmt, 1);
             const owner_text: []const u8 = if (owner_ptr != null) std.mem.span(owner_ptr) else "<unowned>";
-            std.debug.print("  {s:<20} {d}\n", .{ owner_text, count });
+            try printStdout(allocator, "  {s:<20} {d}\n", .{ owner_text, count });
         }
     }
 
     if (search.len > 0) {
-        std.debug.print("\nSearch results for: '{s}'\n", .{search});
+        try printStdout(allocator, "\nSearch results for: '{s}'\n", .{search});
         const search_sql =
             "SELECT COALESCE(id, '<no-id>'), COALESCE(title, ''), COALESCE(status, ''), " ++
             "COALESCE(owner, ''), path FROM tickets " ++
@@ -2195,7 +2213,7 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             const owner_text: []const u8 = if (owner_ptr != null) std.mem.span(owner_ptr) else "";
             const path_text: []const u8 = if (path_ptr != null) std.mem.span(path_ptr) else "";
 
-            std.debug.print("  {s}  {s:<12} {s:<12} {s}  ({s})\n", .{ id_text, status_text, owner_text, title_text, path_text });
+            try printStdout(allocator, "  {s}  {s:<12} {s:<12} {s}  ({s})\n", .{ id_text, status_text, owner_text, title_text, path_text });
         }
     }
 }
