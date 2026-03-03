@@ -16,6 +16,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Added | Bootstrapped initial Zig `mt` port scaffold under `ports/zig-mt` with mapped command surface and buildable CLI entrypoint
 - 2026-03-03 | Added | Bootstrapped initial Rust `mt` port scaffold under `ports/rust-mt` with mapped command surface and buildable CLI entrypoint
 - 2026-03-03 | Added | Added cross-language conformance fixtures and reusable runner for validating command parity against Python reference behavior
 - 2026-03-03 | Docs | Added `ports/porting_phase1.md` with milestone sequencing, parity gates, owner model, and delivery signoff checklist for portability execution
