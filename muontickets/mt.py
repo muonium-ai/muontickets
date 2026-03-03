@@ -49,6 +49,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -227,8 +228,23 @@ def read_ticket(path: str) -> Ticket:
     return Ticket(path=path, meta=meta, body=body)
 
 def write_ticket(t: Ticket) -> None:
-    with open(t.path, "w", encoding="utf-8") as f:
-        f.write(join_frontmatter(t.meta, t.body))
+    content = join_frontmatter(t.meta, t.body)
+    directory = os.path.dirname(t.path) or "."
+    os.makedirs(directory, exist_ok=True)
+
+    fd, tmp_path = tempfile.mkstemp(prefix=".mt-tmp-", suffix=".md", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, t.path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 def iter_ticket_files(tdir: str) -> List[str]:
     if not os.path.isdir(tdir):
