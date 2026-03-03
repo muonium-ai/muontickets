@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use regex::Regex;
+use serde_json::json;
 use serde_yaml::{Mapping, Value};
 
 #[derive(Parser, Debug)]
@@ -56,6 +57,22 @@ enum Commands {
     Pick {
         #[arg(long)]
         owner: String,
+        #[arg(long)]
+        label: Vec<String>,
+        #[arg(long = "avoid-label")]
+        avoid_label: Vec<String>,
+        #[arg(long)]
+        priority: Option<String>,
+        #[arg(long = "type")]
+        ticket_type: Option<String>,
+        #[arg(long, default_value = "")]
+        branch: String,
+        #[arg(long = "ignore-deps")]
+        ignore_deps: bool,
+        #[arg(long = "max-claimed-per-owner", default_value_t = 2)]
+        max_claimed_per_owner: i32,
+        #[arg(long)]
+        json: bool,
     },
     Claim {
         id: String,
@@ -106,6 +123,25 @@ const DEFAULT_STATES: &[&str] = &["ready", "claimed", "blocked", "needs_review",
 const DEFAULT_PRIORITIES: &[&str] = &["p0", "p1", "p2"];
 const DEFAULT_TYPES: &[&str] = &["spec", "code", "tests", "docs", "refactor", "chore"];
 const DEFAULT_EFFORTS: &[&str] = &["xs", "s", "m", "l"];
+
+fn priority_weight(priority: &str) -> i32 {
+    match priority {
+        "p0" => 300,
+        "p1" => 200,
+        "p2" => 100,
+        _ => 0,
+    }
+}
+
+fn effort_weight(effort: &str) -> i32 {
+    match effort {
+        "xs" => 40,
+        "s" => 30,
+        "m" => 20,
+        "l" => 10,
+        _ => 0,
+    }
+}
 
 fn today_str() -> String {
     Utc::now().date_naive().format("%Y-%m-%d").to_string()
@@ -1139,6 +1175,185 @@ fn cmd_show(ticket_id: String) -> Result<i32> {
     Ok(0)
 }
 
+fn compute_score(meta: &Mapping, id_to_meta: &BTreeMap<String, Mapping>) -> f64 {
+    let priority = map_get_string(meta, "priority").unwrap_or_else(|| "p2".to_string());
+    let effort = map_get_string(meta, "effort").unwrap_or_else(|| "s".to_string());
+    let deps = map_get_string_array(meta, "depends_on");
+    let created = map_get_string(meta, "created").unwrap_or_else(|| "1970-01-01".to_string());
+
+    let base = priority_weight(&priority) + effort_weight(&effort);
+    let dep_penalty = 5 * (deps.len() as i32);
+
+    let age_days = chrono::NaiveDate::parse_from_str(&created, "%Y-%m-%d")
+        .ok()
+        .map(|created_date| (Utc::now().date_naive() - created_date).num_days())
+        .unwrap_or(0)
+        .clamp(0, 365) as i32;
+
+    let (ok, _) = deps_satisfied(meta, id_to_meta);
+    if !ok {
+        return -1_000_000_000.0;
+    }
+
+    (base + age_days - dep_penalty) as f64
+}
+
+fn append_progress_log(body: &str, line: &str) -> String {
+    let marker = "## Progress Log";
+    let mut updated = body.trim_end().to_string();
+    if !updated.contains(marker) {
+        if !updated.is_empty() {
+            updated.push_str("\n\n");
+        }
+        updated.push_str(marker);
+        updated.push('\n');
+    }
+    format!("{}\n- {}: {}\n", updated.trim_end(), today_str(), line.trim())
+}
+
+fn cmd_comment(id: String, text: String) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let path = find_ticket_by_id(&repo, &id)?;
+    let (mut meta, body) = read_ticket(&path)?;
+    normalize_meta(&mut meta);
+    map_set_string(&mut meta, "updated", &today_str());
+    let body = append_progress_log(&body, &text);
+    write_ticket(&path, &meta, &body)?;
+    println!("commented on {id}");
+    Ok(0)
+}
+
+fn cmd_pick(
+    owner: String,
+    label: Vec<String>,
+    avoid_label: Vec<String>,
+    priority: Option<String>,
+    ticket_type: Option<String>,
+    branch: String,
+    ignore_deps: bool,
+    max_claimed_per_owner: i32,
+    as_json: bool,
+) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let mut tickets = Vec::new();
+
+    for path in iter_ticket_files(&tickets_dir(&repo))? {
+        let (mut meta, _body) = match read_ticket(&path) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        normalize_meta(&mut meta);
+        tickets.push((path, meta));
+    }
+
+    let mut id_to_meta = BTreeMap::new();
+    for (_path, meta) in &tickets {
+        if let Some(ticket_id) = map_get_string(meta, "id") {
+            id_to_meta.insert(ticket_id, meta.clone());
+        }
+    }
+
+    let claimed_count = id_to_meta
+        .values()
+        .filter(|meta| map_get_status(meta) == "claimed" && map_get_string(meta, "owner").unwrap_or_default() == owner)
+        .count() as i32;
+    if claimed_count >= max_claimed_per_owner {
+        return Err(anyhow!(
+            "owner {owner:?} already has {claimed_count} claimed tickets (max {max_claimed_per_owner})."
+        ));
+    }
+
+    let mut candidates: Vec<(f64, String, String, PathBuf)> = Vec::new();
+    for (path, meta) in &tickets {
+        if map_get_status(meta) != "ready" {
+            continue;
+        }
+        if let Some(ref wanted_priority) = priority {
+            if map_get_string(meta, "priority").unwrap_or_default() != *wanted_priority {
+                continue;
+            }
+        }
+        if let Some(ref wanted_type) = ticket_type {
+            if map_get_string(meta, "type").unwrap_or_default() != *wanted_type {
+                continue;
+            }
+        }
+
+        let labels = map_get_string_array(meta, "labels");
+        let label_set = labels.iter().cloned().collect::<BTreeSet<_>>();
+        if !label.is_empty() && !label.iter().all(|item| label_set.contains(item)) {
+            continue;
+        }
+        if !avoid_label.is_empty() && avoid_label.iter().any(|item| label_set.contains(item)) {
+            continue;
+        }
+
+        let (deps_ok, _) = deps_satisfied(meta, &id_to_meta);
+        if !deps_ok && !ignore_deps {
+            continue;
+        }
+
+        let score = compute_score(meta, &id_to_meta);
+        let updated = map_get_string(meta, "updated").unwrap_or_default();
+        let ticket_id = map_get_string(meta, "id").unwrap_or_default();
+        candidates.push((score, updated, ticket_id, path.clone()));
+    }
+
+    if candidates.is_empty() {
+        return Err(anyhow!("no claimable tickets found (ready + deps satisfied + filters)."));
+    }
+
+    candidates.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+    });
+
+    let (score, _updated, ticket_id, path) = candidates[0].clone();
+    let (mut meta, body) = read_ticket(&path)?;
+    normalize_meta(&mut meta);
+
+    map_set_string(&mut meta, "status", "claimed");
+    map_set_string(&mut meta, "owner", &owner);
+    let chosen_branch = if branch.trim().is_empty() {
+        _default_branch(&meta)
+    } else {
+        branch.trim().to_string()
+    };
+    map_set_string(&mut meta, "branch", &chosen_branch);
+    map_set_string(&mut meta, "updated", &today_str());
+    meta.insert(
+        Value::String("score".to_string()),
+        Value::Number(serde_yaml::Number::from(score as i64)),
+    );
+
+    write_ticket(&path, &meta, &body)?;
+
+    if as_json {
+        println!(
+            "{}",
+            json!({
+                "picked": ticket_id,
+                "owner": owner,
+                "branch": chosen_branch,
+                "score": score,
+            })
+        );
+    } else {
+        println!(
+            "picked {} (score {:.1}) -> claimed as {} (branch: {})",
+            ticket_id, score, owner, chosen_branch
+        );
+    }
+
+    Ok(0)
+}
+
 fn run() -> Result<i32> {
     let cli = Cli::parse();
     match cli.command {
@@ -1162,10 +1377,27 @@ fn run() -> Result<i32> {
             show_invalid,
         } => cmd_ls(status, label, owner, priority, ticket_type, show_invalid),
         Commands::Show { id } => cmd_show(id),
-        Commands::Pick { owner } => {
-            println!("TODO: pick (Rust port): owner={owner}");
-            Ok(0)
-        }
+        Commands::Pick {
+            owner,
+            label,
+            avoid_label,
+            priority,
+            ticket_type,
+            branch,
+            ignore_deps,
+            max_claimed_per_owner,
+            json,
+        } => cmd_pick(
+            owner,
+            label,
+            avoid_label,
+            priority,
+            ticket_type,
+            branch,
+            ignore_deps,
+            max_claimed_per_owner,
+            json,
+        ),
         Commands::Claim {
             id,
             owner,
@@ -1173,10 +1405,7 @@ fn run() -> Result<i32> {
             ignore_deps,
             force,
         } => cmd_claim(id, owner, branch, ignore_deps, force),
-        Commands::Comment { id, text } => {
-            println!("TODO: comment (Rust port): {id} text={text}");
-            Ok(0)
-        }
+        Commands::Comment { id, text } => cmd_comment(id, text),
         Commands::SetStatus {
             id,
             status,

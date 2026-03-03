@@ -5,8 +5,8 @@ This directory hosts the first non-Python implementation track for MuonTickets (
 ## Current status
 
 - Rust crate scaffold created.
-- First executable slice implemented: `init`, `new`, `ls`, `show` (file-backed ticket operations).
-- Remaining commands are still placeholder handlers and will be implemented incrementally with parity tests.
+- Implemented commands: `init`, `new`, `ls`, `show`, `claim`, `pick`, `comment`, `set-status`, `done`, `archive`, `validate`.
+- Remaining placeholders: `graph`, `export`, `stats`, `report`.
 
 ## Build and run
 
@@ -17,5 +17,5 @@ cargo run -- --help
 
 ## Next implementation slices
 
-1. Implement state transitions and dependency validation (`claim`, `pick`, `set-status`, `done`, `archive`, `validate`).
-2. Implement reporting/export/graph/stats and close parity gaps using `tests/conformance` fixtures.
+1. Implement reporting/export/graph/stats and close parity gaps using `tests/conformance` fixtures.
+2. Tighten option-level behavior parity and broaden conformance fixture coverage.
