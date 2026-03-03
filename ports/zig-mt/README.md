@@ -19,6 +19,29 @@ zig build
 zig build run -- --help
 ```
 
+## Cross-compilation artifacts
+
+Build release artifacts for macOS/Linux/Windows (archives + SHA256 sums):
+
+```bash
+cd ports/zig-mt
+./scripts/release.sh
+```
+
+Quick native-only build artifact:
+
+```bash
+./scripts/release.sh --targets native
+```
+
+Build only selected targets:
+
+```bash
+./scripts/release.sh --targets aarch64-macos,x86_64-linux
+```
+
+Note: this port links against system `sqlite3` + libc, so cross-target builds require target-compatible sysroots/libraries. The script continues on failed targets and reports a summary.
+
 ## Conformance runner integration
 
 ```bash
@@ -27,4 +50,4 @@ MT_CMD="$(pwd)/zig-out/bin/mt-zig" ../../.venv/bin/python ../../tests/conformanc
 
 ## Next slices
 
-1. Add cross-compilation artifacts for macOS/Linux/Windows.
+1. Expand release automation with CI publishing/signing.
