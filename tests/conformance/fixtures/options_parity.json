@@ -1,0 +1,72 @@
+{
+  "name": "options_parity",
+  "description": "Exercises option-level parity for set-status, graph, export, and validate.",
+  "steps": [
+    {
+      "name": "init board",
+      "args": ["init"],
+      "expect_exit": 0,
+      "expect_output_contains": ["created"]
+    },
+    {
+      "name": "create dep ticket",
+      "args": ["new", "Task A", "--depends-on", "T-000001"],
+      "expect_exit": 0,
+      "expect_output_contains": ["T-000002.md"]
+    },
+    {
+      "name": "claim with ignore deps",
+      "args": ["claim", "T-000002", "--owner", "agent-opt", "--ignore-deps"],
+      "expect_exit": 0,
+      "expect_output_contains": ["claimed T-000002"]
+    },
+    {
+      "name": "set ready and clear owner",
+      "args": ["set-status", "T-000002", "ready", "--force", "--clear-owner"],
+      "expect_exit": 0,
+      "expect_output_contains": ["T-000002: claimed -> ready"]
+    },
+    {
+      "name": "show owner/branch cleared",
+      "args": ["show", "T-000002"],
+      "expect_exit": 0,
+      "expect_output_contains": ["owner: null", "branch: null", "status: ready"]
+    },
+    {
+      "name": "graph mermaid",
+      "args": ["graph", "--mermaid"],
+      "expect_exit": 0,
+      "expect_output_contains": ["```mermaid", "graph TD", "T-000001"]
+    },
+    {
+      "name": "export jsonl",
+      "args": ["export", "--format", "jsonl"],
+      "expect_exit": 0,
+      "expect_output_contains": ["\"id\"", "T-000002"]
+    },
+    {
+      "name": "create second dep ticket",
+      "args": ["new", "Task B", "--depends-on", "T-000001"],
+      "expect_exit": 0,
+      "expect_output_contains": ["T-000003.md"]
+    },
+    {
+      "name": "claim second with ignore deps",
+      "args": ["claim", "T-000003", "--owner", "agent-opt", "--ignore-deps"],
+      "expect_exit": 0,
+      "expect_output_contains": ["claimed T-000003"]
+    },
+    {
+      "name": "validate max claimed failure",
+      "args": ["validate", "--max-claimed-per-owner", "0"],
+      "expect_exit": 1,
+      "expect_output_contains": ["has", "claimed tickets", "max 0"]
+    },
+    {
+      "name": "validate enforce deps failure",
+      "args": ["validate", "--enforce-done-deps"],
+      "expect_exit": 1,
+      "expect_output_contains": ["status claimed but deps not done"]
+    }
+  ]
+}

@@ -59,10 +59,31 @@ class ConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
+    def test_options_parity_fixture(self) -> None:
+        proc = self.run_fixture("options_parity.json")
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
     def test_zig_reporting_graph_pick_fixture(self) -> None:
         zig_bin = self.get_zig_bin()
 
         fixture = FIXTURES / "zig_reporting_graph_pick.json"
+        env = dict(**__import__("os").environ)
+        env["MT_CMD"] = zig_bin
+        proc = subprocess.run(
+            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
+            cwd=str(ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_zig_options_parity_fixture(self) -> None:
+        zig_bin = self.get_zig_bin()
+
+        fixture = FIXTURES / "options_parity.json"
         env = dict(**__import__("os").environ)
         env["MT_CMD"] = zig_bin
         proc = subprocess.run(

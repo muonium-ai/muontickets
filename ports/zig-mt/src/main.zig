@@ -864,7 +864,7 @@ fn cmdClaim(allocator: std.mem.Allocator, id: []const u8, owner: []const u8, bra
     std.debug.print("claimed {s} as {s} (branch: {s})\n", .{ id, owner, branch });
 }
 
-fn cmdSetStatus(allocator: std.mem.Allocator, id: []const u8, new_status: []const u8, force: bool) !void {
+fn cmdSetStatus(allocator: std.mem.Allocator, id: []const u8, new_status: []const u8, force: bool, clear_owner: bool) !void {
     if (!isTicketId(id)) {
         std.debug.print("invalid ticket id: {s}\n", .{id});
         std.process.exit(2);
@@ -897,7 +897,16 @@ fn cmdSetStatus(allocator: std.mem.Allocator, id: []const u8, new_status: []cons
 
     const next = try setMetaField(allocator, content, "status", new_status);
     defer allocator.free(next);
-    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = next });
+
+    const final_text = if (std.mem.eql(u8, new_status, "ready") and clear_owner) blk: {
+        const with_owner = try setMetaField(allocator, next, "owner", "null");
+        defer allocator.free(with_owner);
+        const with_branch = try setMetaField(allocator, with_owner, "branch", "null");
+        break :blk with_branch;
+    } else try allocator.dupe(u8, next);
+    defer allocator.free(final_text);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = final_text });
     std.debug.print("{s}: {s} -> {s}\n", .{ id, old, new_status });
 }
 
@@ -1001,7 +1010,14 @@ fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
     std.debug.print("archived {s} -> {s}\n", .{ id, rel });
 }
 
-fn cmdValidate(allocator: std.mem.Allocator) !void {
+fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+    const max_claimed_raw = getOptValue(cmd_args, "--max-claimed-per-owner") orelse "2";
+    const max_claimed = std.fmt.parseInt(u32, max_claimed_raw, 10) catch {
+        std.debug.print("invalid --max-claimed-per-owner: {s}\n", .{max_claimed_raw});
+        std.process.exit(2);
+    };
+    const enforce_done_deps = hasFlag(cmd_args, "--enforce-done-deps");
+
     const repo = try findRepoRoot(allocator);
     defer allocator.free(repo);
     const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
@@ -1015,6 +1031,67 @@ fn cmdValidate(allocator: std.mem.Allocator) !void {
     defer {
         for (errors.items) |e| allocator.free(e);
         errors.deinit(allocator);
+    }
+
+    var owner_claims = std.StringHashMap(u32).init(allocator);
+    defer {
+        var key_it = owner_claims.keyIterator();
+        while (key_it.next()) |k| allocator.free(k.*);
+        owner_claims.deinit();
+    }
+
+    var dir2 = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
+    defer dir2.close();
+    var it2 = dir2.iterate();
+    while (try it2.next()) |entry| {
+        if (entry.kind != .file or !isTicketFilename(entry.name)) continue;
+        const p = try std.fs.path.join(allocator, &[_][]const u8{ tdir, entry.name });
+        defer allocator.free(p);
+        const content = try std.fs.cwd().readFileAlloc(allocator, p, 1024 * 1024);
+        defer allocator.free(content);
+
+        const id = parseMetaField(content, "id") orelse entry.name[0..8];
+        const status = parseMetaField(content, "status") orelse "";
+        const owner = parseMetaField(content, "owner") orelse "";
+
+        if (std.mem.eql(u8, status, "claimed") and owner.len > 0 and !std.mem.eql(u8, owner, "null")) {
+            const existing = owner_claims.get(owner) orelse 0;
+            if (existing == 0) {
+                try owner_claims.put(try allocator.dupe(u8, owner), 1);
+            } else {
+                try owner_claims.put(owner, existing + 1);
+            }
+        }
+
+        if (enforce_done_deps and (std.mem.eql(u8, status, "claimed") or std.mem.eql(u8, status, "needs_review") or std.mem.eql(u8, status, "done"))) {
+            const deps_raw = parseMetaField(content, "depends_on") orelse "[]";
+            var deps = try listItems(allocator, deps_raw);
+            defer freeListItems(allocator, &deps);
+            if (deps.items.len > 0) {
+                var missing = try std.ArrayList(u8).initCapacity(allocator, 32);
+                defer missing.deinit(allocator);
+                var first = true;
+                for (deps.items) |dep| {
+                    if (!depDone(repo, allocator, dep)) {
+                        if (!first) try missing.appendSlice(allocator, ", ");
+                        first = false;
+                        try missing.appendSlice(allocator, dep);
+                    }
+                }
+                if (missing.items.len > 0) {
+                    const msg = try std.fmt.allocPrint(allocator, "{s} status {s} but deps not done: [{s}]", .{ id, status, missing.items });
+                    try errors.append(allocator, msg);
+                }
+            }
+        }
+    }
+
+    var owner_it = owner_claims.iterator();
+    while (owner_it.next()) |entry| {
+        if (entry.value_ptr.* > max_claimed) {
+            const msg = try std.fmt.allocPrint(allocator, "owner '{s}' has {d} claimed tickets (max {d})", .{ entry.key_ptr.*, entry.value_ptr.*, max_claimed });
+            try errors.append(allocator, msg);
+        }
     }
 
     var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
@@ -1258,12 +1335,20 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     std.process.exit(3);
 }
 
-fn cmdGraph(allocator: std.mem.Allocator) !void {
+fn cmdGraph(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+    const mermaid = hasFlag(cmd_args, "--mermaid");
+    const open_only = hasFlag(cmd_args, "--open-only");
+
     const repo = try findRepoRoot(allocator);
     defer allocator.free(repo);
     const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
     defer allocator.free(tdir);
     if (!dirExists(tdir)) return;
+
+    if (mermaid) {
+        std.debug.print("```mermaid\n", .{});
+        std.debug.print("graph TD\n", .{});
+    }
 
     var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
     defer dir.close();
@@ -1275,16 +1360,30 @@ fn cmdGraph(allocator: std.mem.Allocator) !void {
         const content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
         defer allocator.free(content);
         const id = parseMetaField(content, "id") orelse entry.name[0..8];
+        const status = parseMetaField(content, "status") orelse "";
+        if (open_only and std.mem.eql(u8, status, "done")) continue;
         const deps_raw = parseMetaField(content, "depends_on") orelse "[]";
         var deps = try listItems(allocator, deps_raw);
         defer freeListItems(allocator, &deps);
         for (deps.items) |dep| {
-            std.debug.print("{s} -> {s}\n", .{ dep, id });
+            if (mermaid) {
+                std.debug.print("  {s} --> {s}\n", .{ dep, id });
+            } else {
+                std.debug.print("{s} -> {s}\n", .{ dep, id });
+            }
         }
     }
+
+    if (mermaid) std.debug.print("```\n", .{});
 }
 
-fn cmdExport(allocator: std.mem.Allocator) !void {
+fn cmdExport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+    const format = getOptValue(cmd_args, "--format") orelse "json";
+    if (!std.mem.eql(u8, format, "json") and !std.mem.eql(u8, format, "jsonl")) {
+        std.debug.print("Unsupported format: {s}\n", .{format});
+        std.process.exit(2);
+    }
+
     const repo = try findRepoRoot(allocator);
     defer allocator.free(repo);
     const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
@@ -1294,7 +1393,7 @@ fn cmdExport(allocator: std.mem.Allocator) !void {
         return;
     }
 
-    std.debug.print("[\n", .{});
+    if (std.mem.eql(u8, format, "json")) std.debug.print("[\n", .{});
     var first = true;
     var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
     defer dir.close();
@@ -1311,11 +1410,15 @@ fn cmdExport(allocator: std.mem.Allocator) !void {
         const priority = parseMetaField(content, "priority") orelse "";
         const tp = parseMetaField(content, "type") orelse "";
         const effort = parseMetaField(content, "effort") orelse "";
-        if (!first) std.debug.print(",\n", .{});
-        first = false;
-        std.debug.print("  {{\"id\":\"{s}\",\"title\":\"{s}\",\"status\":\"{s}\",\"priority\":\"{s}\",\"type\":\"{s}\",\"effort\":\"{s}\"}}", .{ id, title, status, priority, tp, effort });
+        if (std.mem.eql(u8, format, "json")) {
+            if (!first) std.debug.print(",\n", .{});
+            first = false;
+            std.debug.print("  {{\"id\":\"{s}\",\"title\":\"{s}\",\"status\":\"{s}\",\"priority\":\"{s}\",\"type\":\"{s}\",\"effort\":\"{s}\"}}", .{ id, title, status, priority, tp, effort });
+        } else {
+            std.debug.print("{{\"id\":\"{s}\",\"title\":\"{s}\",\"status\":\"{s}\",\"priority\":\"{s}\",\"type\":\"{s}\",\"effort\":\"{s}\"}}\n", .{ id, title, status, priority, tp, effort });
+        }
     }
-    std.debug.print("\n]\n", .{});
+    if (std.mem.eql(u8, format, "json")) std.debug.print("\n]\n", .{});
 }
 
 fn cmdStats(allocator: std.mem.Allocator) !void {
@@ -1883,10 +1986,10 @@ pub fn main() !void {
         },
         .set_status => {
             if (args.len < 4) {
-                std.debug.print("usage: mt-zig set-status <id> <status> [--force]\n", .{});
+                std.debug.print("usage: mt-zig set-status <id> <status> [--force] [--clear-owner]\n", .{});
                 std.process.exit(2);
             }
-            try cmdSetStatus(allocator, args[2], args[3], hasFlag(args[4..], "--force"));
+            try cmdSetStatus(allocator, args[2], args[3], hasFlag(args[4..], "--force"), hasFlag(args[4..], "--clear-owner"));
         },
         .done => {
             if (args.len < 3) {
@@ -1902,10 +2005,10 @@ pub fn main() !void {
             }
             try cmdArchive(allocator, args[2], hasFlag(args[3..], "--force"));
         },
-        .graph => try cmdGraph(allocator),
-        .@"export" => try cmdExport(allocator),
+        .graph => try cmdGraph(allocator, args[2..]),
+        .@"export" => try cmdExport(allocator, args[2..]),
         .stats => try cmdStats(allocator),
-        .validate => try cmdValidate(allocator),
+        .validate => try cmdValidate(allocator, args[2..]),
         .report => try cmdReport(allocator, args[2..]),
     }
 }
