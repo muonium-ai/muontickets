@@ -17,6 +17,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-03 | Added | Bootstrapped initial Rust `mt` port scaffold under `ports/rust-mt` with mapped command surface and buildable CLI entrypoint | Ticket: T-000009
 - 2026-03-03 | Added | Added cross-language conformance fixtures and reusable runner for validating command parity against Python reference behavior | Ticket: T-000008
 - 2026-03-03 | Docs | Added `porting_phase1.md` with milestone sequencing, parity gates, owner model, and delivery signoff checklist for portability execution | Ticket: T-000007
 - 2026-03-03 | Docs | Recommended one ticket fix per commit/PR and parallel multi-agent execution for isolated tickets | Ticket: T-000011
