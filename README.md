@@ -58,6 +58,8 @@ uv run python3 mt.py report --summary
 
 Agent quick-reference guide: see [skills.md](skills.md) for install modes, command workflows, and best practices.
 
+Troubleshooting rule: do not edit files under `tickets/` directly for normal workflow actions (claim/status/comments/archive). Always use `mt.py` commands so transition checks, dependency checks, and metadata updates are applied consistently.
+
 Run these from the project root where MuonTickets is installed.
 
 ```bash
