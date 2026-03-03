@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use regex::Regex;
+use rusqlite::{params, Connection};
 use serde_json::json;
 use serde_yaml::{Mapping, Value};
 
@@ -107,8 +108,16 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
-    Graph,
-    Export,
+    Graph {
+        #[arg(long)]
+        mermaid: bool,
+        #[arg(long = "open-only")]
+        open_only: bool,
+    },
+    Export {
+        #[arg(long, default_value = "json")]
+        format: String,
+    },
     Stats,
     Validate {
         #[arg(long = "max-claimed-per-owner", default_value_t = 2)]
@@ -116,7 +125,16 @@ enum Commands {
         #[arg(long = "enforce-done-deps")]
         enforce_done_deps: bool,
     },
-    Report,
+    Report {
+        #[arg(long, default_value = "tickets/tickets_report.sqlite3")]
+        db: String,
+        #[arg(long, default_value_t = true)]
+        summary: bool,
+        #[arg(long, default_value = "")]
+        search: String,
+        #[arg(long, default_value_t = 30)]
+        limit: i32,
+    },
 }
 
 const DEFAULT_STATES: &[&str] = &["ready", "claimed", "blocked", "needs_review", "done"];
@@ -1354,6 +1372,329 @@ fn cmd_pick(
     Ok(0)
 }
 
+fn cmd_graph(mermaid: bool, open_only: bool) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let mut tickets = Vec::new();
+
+    for path in iter_ticket_files(&tickets_dir(&repo))? {
+        let (mut meta, _body) = match read_ticket(&path) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        normalize_meta(&mut meta);
+        tickets.push(meta);
+    }
+
+    let mut edges: Vec<(String, String)> = Vec::new();
+    for meta in tickets {
+        if open_only && map_get_status(&meta) == "done" {
+            continue;
+        }
+        let tid = map_get_string(&meta, "id").unwrap_or_default();
+        for dep in map_get_string_array(&meta, "depends_on") {
+            edges.push((dep, tid.clone()));
+        }
+    }
+
+    if mermaid {
+        println!("```mermaid");
+        println!("graph TD");
+        for (dep, tid) in edges {
+            println!("  {dep} --> {tid}");
+        }
+        println!("```");
+    } else {
+        for (dep, tid) in edges {
+            println!("{dep} -> {tid}");
+        }
+    }
+    Ok(0)
+}
+
+fn cmd_export(format: String) -> Result<i32> {
+    let format = format.to_lowercase();
+    if format != "json" && format != "jsonl" {
+        return Err(anyhow!("Unsupported format: {}", format));
+    }
+
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+    let mut rows = Vec::new();
+
+    for path in iter_ticket_files(&tickets_dir(&repo))? {
+        let (mut meta, body) = match read_ticket(&path) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        normalize_meta(&mut meta);
+        let excerpt = body.lines().take(20).collect::<Vec<_>>().join("\n").trim().to_string();
+        rows.push(json!({
+            "id": map_get_string(&meta, "id"),
+            "title": map_get_string(&meta, "title"),
+            "status": map_get_string(&meta, "status"),
+            "priority": map_get_string(&meta, "priority"),
+            "type": map_get_string(&meta, "type"),
+            "effort": map_get_string(&meta, "effort"),
+            "labels": map_get_string_array(&meta, "labels"),
+            "tags": map_get_string_array(&meta, "tags"),
+            "owner": map_get_string(&meta, "owner"),
+            "created": map_get_string(&meta, "created"),
+            "updated": map_get_string(&meta, "updated"),
+            "depends_on": map_get_string_array(&meta, "depends_on"),
+            "branch": map_get_string(&meta, "branch"),
+            "excerpt": excerpt,
+            "path": path.strip_prefix(&repo).unwrap_or(&path).display().to_string(),
+        }));
+    }
+
+    if format == "json" {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else {
+        for row in rows {
+            println!("{}", serde_json::to_string(&row)?);
+        }
+    }
+    Ok(0)
+}
+
+fn cmd_stats() -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+
+    let mut by_status: BTreeMap<String, i32> = BTreeMap::new();
+    let mut by_owner: BTreeMap<String, i32> = BTreeMap::new();
+
+    for path in iter_ticket_files(&tickets_dir(&repo))? {
+        let (mut meta, _body) = match read_ticket(&path) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        normalize_meta(&mut meta);
+        let status = map_get_status(&meta);
+        *by_status.entry(status.clone()).or_insert(0) += 1;
+        if status == "claimed" {
+            let owner = map_get_string(&meta, "owner").unwrap_or_else(|| "<unowned>".to_string());
+            *by_owner.entry(owner).or_insert(0) += 1;
+        }
+    }
+
+    println!("Status counts:");
+    for status in DEFAULT_STATES {
+        println!("  {:<12} {}", status, by_status.get(*status).copied().unwrap_or(0));
+    }
+
+    if !by_owner.is_empty() {
+        println!("\nClaimed by owner:");
+        let mut owners = by_owner.into_iter().collect::<Vec<_>>();
+        owners.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        for (owner, count) in owners {
+            println!("  {:<20} {}", owner, count);
+        }
+    }
+
+    Ok(0)
+}
+
+fn ticket_bucket(repo: &Path, path: &Path) -> String {
+    let rel = path.strip_prefix(repo).unwrap_or(path).display().to_string();
+    if rel.starts_with("tickets/archive/") {
+        "archive".to_string()
+    } else if rel.starts_with("tickets/backlogs/") {
+        "backlogs".to_string()
+    } else if rel.starts_with("tickets/") {
+        "tickets".to_string()
+    } else {
+        "other".to_string()
+    }
+}
+
+fn cmd_report(db: String, summary: bool, search: String, limit: i32) -> Result<i32> {
+    let cwd = std::env::current_dir().context("failed to get current directory")?;
+    let repo = find_repo_root(&cwd);
+
+    let db_path = {
+        let raw = PathBuf::from(&db);
+        if raw.is_absolute() { raw } else { repo.join(raw) }
+    };
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut rows: Vec<(Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, String, String, String, String, String, i32, String)> = Vec::new();
+    let mut parse_errors: Vec<(String, String)> = Vec::new();
+
+    for path in all_ticket_paths(&repo)? {
+        let rel = path.strip_prefix(&repo).unwrap_or(&path).display().to_string();
+        let ticket = read_ticket(&path);
+        let (mut meta, body) = match ticket {
+            Ok(v) => v,
+            Err(err) => {
+                parse_errors.push((rel, err.to_string()));
+                continue;
+            }
+        };
+        normalize_meta(&mut meta);
+        let bucket = ticket_bucket(&repo, &path);
+        let is_archived = if bucket == "archive" { 1 } else { 0 };
+
+        rows.push((
+            map_get_string(&meta, "id"),
+            map_get_string(&meta, "title"),
+            map_get_string(&meta, "status"),
+            map_get_string(&meta, "priority"),
+            map_get_string(&meta, "type"),
+            map_get_string(&meta, "effort"),
+            map_get_string(&meta, "owner"),
+            map_get_string(&meta, "created"),
+            map_get_string(&meta, "updated"),
+            map_get_string(&meta, "branch"),
+            serde_json::to_string(&map_get_string_array(&meta, "labels"))?,
+            serde_json::to_string(&map_get_string_array(&meta, "tags"))?,
+            serde_json::to_string(&map_get_string_array(&meta, "depends_on"))?,
+            rel,
+            bucket,
+            is_archived,
+            body,
+        ));
+    }
+
+    let conn = Connection::open(&db_path)?;
+    conn.execute("DROP TABLE IF EXISTS tickets", [])?;
+    conn.execute("DROP TABLE IF EXISTS parse_errors", [])?;
+    conn.execute(
+        "CREATE TABLE tickets (
+          id TEXT,
+          title TEXT,
+          status TEXT,
+          priority TEXT,
+          type TEXT,
+          effort TEXT,
+          owner TEXT,
+          created TEXT,
+          updated TEXT,
+          branch TEXT,
+          labels_json TEXT,
+          tags_json TEXT,
+          depends_on_json TEXT,
+          path TEXT PRIMARY KEY,
+          bucket TEXT,
+          is_archived INTEGER,
+          body TEXT
+        )",
+        [],
+    )?;
+    conn.execute(
+        "CREATE TABLE parse_errors (
+          path TEXT PRIMARY KEY,
+          error TEXT
+        )",
+        [],
+    )?;
+
+    {
+        let mut stmt = conn.prepare(
+            "INSERT INTO tickets (
+              id, title, status, priority, type, effort, owner, created, updated, branch,
+              labels_json, tags_json, depends_on_json, path, bucket, is_archived, body
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        )?;
+        for row in rows {
+            stmt.execute(params![
+                row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9,
+                row.10, row.11, row.12, row.13, row.14, row.15, row.16
+            ])?;
+        }
+    }
+
+    {
+        let mut stmt = conn.prepare("INSERT INTO parse_errors (path, error) VALUES (?1, ?2)")?;
+        for (path, error) in parse_errors.clone() {
+            stmt.execute(params![path, error])?;
+        }
+    }
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status)", [])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets(priority)", [])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_owner ON tickets(owner)", [])?;
+
+    println!("report db: {}", db_path.display());
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM tickets", [], |row| row.get(0))?;
+    println!("indexed tickets: {}", count);
+    if !parse_errors.is_empty() {
+        println!("parse errors: {}", parse_errors.len());
+    }
+
+    if summary {
+        println!("\nBy status:");
+        {
+            let mut stmt = conn.prepare(
+                "SELECT COALESCE(status, '<none>'), COUNT(*) FROM tickets GROUP BY status ORDER BY COUNT(*) DESC",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let status: String = row.get(0)?;
+                let c: i64 = row.get(1)?;
+                println!("  {:<12} {}", status, c);
+            }
+        }
+
+        println!("\nBy priority:");
+        {
+            let mut stmt = conn.prepare(
+                "SELECT COALESCE(priority, '<none>'), COUNT(*) FROM tickets GROUP BY priority ORDER BY COUNT(*) DESC",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let priority: String = row.get(0)?;
+                let c: i64 = row.get(1)?;
+                println!("  {:<8} {}", priority, c);
+            }
+        }
+
+        println!("\nCompleted by owner:");
+        {
+            let mut stmt = conn.prepare(
+                "SELECT COALESCE(NULLIF(owner, ''), '<unowned>'), COUNT(*)
+                 FROM tickets
+                 WHERE status = 'done'
+                 GROUP BY owner
+                 ORDER BY COUNT(*) DESC",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let owner: String = row.get(0)?;
+                let c: i64 = row.get(1)?;
+                println!("  {:<20} {}", owner, c);
+            }
+        }
+    }
+
+    if !search.is_empty() {
+        println!("\nSearch results for: {:?}", search);
+        let q = format!("%{}%", search);
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(id, '<no-id>'), COALESCE(title, ''), COALESCE(status, ''),
+                    COALESCE(owner, ''), path
+             FROM tickets
+             WHERE id LIKE ?1 OR title LIKE ?2 OR body LIKE ?3 OR labels_json LIKE ?4 OR tags_json LIKE ?5
+             ORDER BY updated DESC, id ASC
+             LIMIT ?6",
+        )?;
+        let mut rows = stmt.query(params![q, q, q, q, q, limit])?;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let title: String = row.get(1)?;
+            let status: String = row.get(2)?;
+            let owner: String = row.get(3)?;
+            let path: String = row.get(4)?;
+            println!("  {}  {:<12} {:<12} {}  ({})", id, status, owner, title, path);
+        }
+    }
+
+    Ok(0)
+}
+
 fn run() -> Result<i32> {
     let cli = Cli::parse();
     match cli.command {
@@ -1414,26 +1755,19 @@ fn run() -> Result<i32> {
         } => cmd_set_status(id, status, force, clear_owner),
         Commands::Done { id, force } => cmd_done(id, force),
         Commands::Archive { id, force } => cmd_archive(id, force),
-        Commands::Graph => {
-            println!("TODO: graph (Rust port)");
-            Ok(0)
-        }
-        Commands::Export => {
-            println!("TODO: export (Rust port)");
-            Ok(0)
-        }
-        Commands::Stats => {
-            println!("TODO: stats (Rust port)");
-            Ok(0)
-        }
+        Commands::Graph { mermaid, open_only } => cmd_graph(mermaid, open_only),
+        Commands::Export { format } => cmd_export(format),
+        Commands::Stats => cmd_stats(),
         Commands::Validate {
             max_claimed_per_owner,
             enforce_done_deps,
         } => cmd_validate(max_claimed_per_owner, enforce_done_deps),
-        Commands::Report => {
-            println!("TODO: report (Rust port)");
-            Ok(0)
-        }
+        Commands::Report {
+            db,
+            summary,
+            search,
+            limit,
+        } => cmd_report(db, summary, search, limit),
     }
 }
 

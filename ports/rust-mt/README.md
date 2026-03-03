@@ -5,8 +5,8 @@ This directory hosts the first non-Python implementation track for MuonTickets (
 ## Current status
 
 - Rust crate scaffold created.
-- Implemented commands: `init`, `new`, `ls`, `show`, `claim`, `pick`, `comment`, `set-status`, `done`, `archive`, `validate`.
-- Remaining placeholders: `graph`, `export`, `stats`, `report`.
+- Implemented commands: `init`, `new`, `ls`, `show`, `claim`, `pick`, `comment`, `set-status`, `done`, `archive`, `validate`, `graph`, `export`, `stats`, `report`.
+- `report` now builds a SQLite database and prints summary/search sections similar to Python behavior.
 
 ## Build and run
 
@@ -17,5 +17,5 @@ cargo run -- --help
 
 ## Next implementation slices
 
-1. Implement reporting/export/graph/stats and close parity gaps using `tests/conformance` fixtures.
-2. Tighten option-level behavior parity and broaden conformance fixture coverage.
+1. Tighten option-level behavior parity and broaden conformance fixture coverage.
+2. Add CI-oriented conformance checks for Rust executable output compatibility.
