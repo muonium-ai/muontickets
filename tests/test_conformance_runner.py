@@ -250,10 +250,10 @@ class ConformanceRunnerTests(unittest.TestCase):
             self.assertIn("priority: p0", text)
             self.assertIn("type: docs", text)
             self.assertIn("effort: l", text)
-            self.assertIn("labels: [\"alpha\", \"beta\"]", text)
-            self.assertIn("tags: [\"zig\", \"template\"]", text)
+            self.assertIn("labels: [alpha, beta]", text)
+            self.assertIn("tags: [zig, template]", text)
             self.assertIn("owner: agent-x", text)
-            self.assertIn("depends_on: [\"T-000123\"]", text)
+            self.assertIn("depends_on: [T-000123]", text)
             self.assertIn("branch: feat/template-defaults", text)
             self.assertIn("Template goal body.", text)
 
@@ -323,10 +323,16 @@ class ConformanceRunnerTests(unittest.TestCase):
             subprocess.run([zig_bin, "init"], cwd=str(root), check=True, capture_output=True, text=True)
 
             t1 = root / "tickets" / "T-000001.md"
-            text = t1.read_text(encoding="utf-8")
-            text = text.replace("created: 1970-01-01", "created: 1970-01-02")
-            text = text.replace("updated: 1970-01-01", "updated: 1970-01-01")
-            t1.write_text(text, encoding="utf-8")
+            lines = t1.read_text(encoding="utf-8").splitlines()
+            rewritten = []
+            for line in lines:
+                if line.startswith("created:"):
+                    rewritten.append("created: 1970-01-02")
+                elif line.startswith("updated:"):
+                    rewritten.append("updated: 1970-01-01")
+                else:
+                    rewritten.append(line)
+            t1.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
 
             validated = subprocess.run([zig_bin, "validate"], cwd=str(root), capture_output=True, text=True)
             self.assertEqual(validated.returncode, 1, msg=f"stdout:\n{validated.stdout}\nstderr:\n{validated.stderr}")

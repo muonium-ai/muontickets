@@ -249,6 +249,8 @@ fn countActiveTicketFiles(allocator: std.mem.Allocator, repo: []const u8) !u32 {
 }
 
 fn writeTicketFile(allocator: std.mem.Allocator, path: []const u8, id: []const u8, title: []const u8, status: []const u8, priority: []const u8, ticket_type: []const u8, effort: []const u8, labels: []const u8, body: []const u8) !void {
+    const today = try todayIsoDate(allocator);
+    defer allocator.free(today);
     const text = try std.fmt.allocPrint(
         allocator,
         \\---
@@ -261,15 +263,15 @@ fn writeTicketFile(allocator: std.mem.Allocator, path: []const u8, id: []const u
         \\labels: {s}
         \\tags: []
         \\owner: null
-        \\created: 1970-01-01
-        \\updated: 1970-01-01
+        \\created: {s}
+        \\updated: {s}
         \\depends_on: []
         \\branch: null
         \\---
         \\
         \\{s}
     ,
-        .{ id, title, status, priority, ticket_type, effort, labels, body },
+        .{ id, title, status, priority, ticket_type, effort, labels, today, today, body },
     );
     defer allocator.free(text);
     try std.fs.cwd().writeFile(.{ .sub_path = path, .data = text });
@@ -561,7 +563,13 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(with_owner);
     const with_branch = try setMetaField(allocator, with_owner, "branch", branch);
     defer allocator.free(with_branch);
-    try std.fs.cwd().writeFile(.{ .sub_path = ticket_path, .data = with_branch });
+    const today = try todayIsoDate(allocator);
+    defer allocator.free(today);
+    const with_created = try setMetaField(allocator, with_branch, "created", today);
+    defer allocator.free(with_created);
+    const with_updated = try setMetaField(allocator, with_created, "updated", today);
+    defer allocator.free(with_updated);
+    try std.fs.cwd().writeFile(.{ .sub_path = ticket_path, .data = with_updated });
 
     std.debug.print("{s}\n", .{ticket_path});
 }
@@ -846,6 +854,31 @@ fn parseIsoDateDays(date: []const u8) ?i64 {
     return daysFromCivil(y, m, d);
 }
 
+fn civilFromDays(days: i64) struct { year: i64, month: i64, day: i64 } {
+    const z = days + 719468;
+    const era = @divFloor(if (z >= 0) z else z - 146096, 146097);
+    const doe = z - era * 146097;
+    const yoe = @divFloor(doe - @divFloor(doe, 1460) + @divFloor(doe, 36524) - @divFloor(doe, 146096), 365);
+    var y = yoe + era * 400;
+    const doy = doe - (365 * yoe + @divFloor(yoe, 4) - @divFloor(yoe, 100));
+    const mp = @divFloor(5 * doy + 2, 153);
+    const d = doy - @divFloor(153 * mp + 2, 5) + 1;
+    var m = mp + (if (mp < 10) @as(i64, 3) else @as(i64, -9));
+    y += if (m <= 2) 1 else 0;
+    if (m <= 0) m += 12;
+    return .{ .year = y, .month = m, .day = d };
+}
+
+fn todayIsoDate(allocator: std.mem.Allocator) ![]u8 {
+    const now_days: i64 = @divFloor(std.time.timestamp(), 86400);
+    const civil = civilFromDays(now_days);
+    return std.fmt.allocPrint(
+        allocator,
+        "{d:0>4}-{d:0>2}-{d:0>2}",
+        .{ @as(u32, @intCast(civil.year)), @as(u8, @intCast(civil.month)), @as(u8, @intCast(civil.day)) },
+    );
+}
+
 fn computePickScore(repo: []const u8, allocator: std.mem.Allocator, content: []const u8, ignore_deps: bool) f64 {
     const pr = parseMetaField(content, "priority") orelse "p2";
     const eff = parseMetaField(content, "effort") orelse "s";
@@ -882,9 +915,18 @@ fn listLiteral(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
     try out.append(allocator, '[');
     for (items, 0..) |item, idx| {
         if (idx > 0) try out.appendSlice(allocator, ", ");
-        try out.append(allocator, '"');
-        try out.appendSlice(allocator, item);
-        try out.append(allocator, '"');
+        const trimmed = std.mem.trim(u8, item, " \t\r");
+        const needs_quote =
+            (trimmed.len != item.len) or
+            (std.mem.indexOfScalar(u8, item, ':') != null) or
+            (std.mem.indexOfScalar(u8, item, '"') != null);
+        if (needs_quote) {
+            try out.append(allocator, '"');
+            try out.appendSlice(allocator, item);
+            try out.append(allocator, '"');
+        } else {
+            try out.appendSlice(allocator, item);
+        }
     }
     try out.append(allocator, ']');
     return out.toOwnedSlice(allocator);
