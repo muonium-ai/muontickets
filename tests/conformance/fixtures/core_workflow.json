@@ -1,0 +1,67 @@
+{
+  "name": "core_workflow",
+  "description": "Exercises lifecycle, archive dependency blocking, and validate remediation messaging.",
+  "steps": [
+    {
+      "name": "init board",
+      "args": ["init"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["created"]
+    },
+    {
+      "name": "create first ticket",
+      "args": ["new", "Task Alpha"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["T-000002.md"]
+    },
+    {
+      "name": "claim first ticket",
+      "args": ["claim", "T-000002", "--owner", "agent-a"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["claimed T-000002 as agent-a"]
+    },
+    {
+      "name": "move to review",
+      "args": ["set-status", "T-000002", "needs_review"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["T-000002: claimed -> needs_review"]
+    },
+    {
+      "name": "mark done",
+      "args": ["done", "T-000002"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["done T-000002"]
+    },
+    {
+      "name": "create dependent ticket",
+      "args": ["new", "Task Beta", "--depends-on", "T-000002"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["T-000003.md"]
+    },
+    {
+      "name": "archive blocked by active dependent",
+      "args": ["archive", "T-000002"],
+      "expect_exit": 2,
+      "expect_stderr_contains": [
+        "active tickets depend on this ticket: T-000003",
+        "using --force can leave invalid active references"
+      ]
+    },
+    {
+      "name": "force archive with warning",
+      "args": ["archive", "T-000002", "--force"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["archived T-000002 -> tickets/archive/T-000002.md"],
+      "expect_stderr_contains": ["force-archiving with active dependents: T-000003"]
+    },
+    {
+      "name": "validate reports archived dependency remediation",
+      "args": ["validate"],
+      "expect_exit": 1,
+      "expect_stderr_contains": [
+        "depends_on archived ticket T-000002",
+        "avoid mt archive --force"
+      ]
+    }
+  ]
+}
