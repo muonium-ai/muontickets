@@ -10,6 +10,17 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    if (target.result.os.tag == .windows) {
+        const vcpkg_root = std.process.getEnvVarOwned(b.allocator, "VCPKG_ROOT") catch null;
+        if (vcpkg_root) |root| {
+            const include_path = std.fs.path.join(b.allocator, &[_][]const u8{ root, "installed", "x64-windows", "include" }) catch unreachable;
+            const lib_path = std.fs.path.join(b.allocator, &[_][]const u8{ root, "installed", "x64-windows", "lib" }) catch unreachable;
+            exe.addIncludePath(.{ .path = include_path });
+            exe.addLibraryPath(.{ .path = lib_path });
+        }
+    }
+
     exe.linkLibC();
     exe.linkSystemLibrary("sqlite3");
 
