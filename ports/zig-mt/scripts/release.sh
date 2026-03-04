@@ -139,9 +139,26 @@ done
 (
   cd "$DIST_DIR"
   rm -f SHA256SUMS
+
+  checksum_file() {
+    local artifact="$1"
+    if command -v shasum >/dev/null 2>&1; then
+      shasum -a 256 "$artifact"
+    elif command -v sha256sum >/dev/null 2>&1; then
+      sha256sum "$artifact"
+    elif command -v openssl >/dev/null 2>&1; then
+      local digest
+      digest="$(openssl dgst -sha256 -r "$artifact" | awk '{print $1}')"
+      printf '%s  %s\n' "$digest" "$artifact"
+    else
+      echo "no SHA-256 checksum tool found (tried: shasum, sha256sum, openssl)" >&2
+      exit 1
+    fi
+  }
+
   for artifact in *.tar.gz *.zip; do
     [[ -e "$artifact" ]] || continue
-    shasum -a 256 "$artifact" >> SHA256SUMS
+    checksum_file "$artifact" >> SHA256SUMS
   done
 )
 
