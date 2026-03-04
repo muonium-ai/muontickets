@@ -1,0 +1,3 @@
+install muontickets as git submodule, read the instructions in the repo for location and other instructions
+
+https://github.com/muonium-ai/muontickets
