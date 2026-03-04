@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("sqlite3.h");
 });
+const builtin = @import("builtin");
 
 const Command = enum {
     init,
@@ -21,6 +22,7 @@ const Command = enum {
     stats,
     validate,
     report,
+    version,
 };
 
 fn parseCommand(raw: []const u8) ?Command {
@@ -41,6 +43,7 @@ fn parseCommand(raw: []const u8) ?Command {
     if (std.mem.eql(u8, raw, "stats")) return .stats;
     if (std.mem.eql(u8, raw, "validate")) return .validate;
     if (std.mem.eql(u8, raw, "report")) return .report;
+    if (std.mem.eql(u8, raw, "version")) return .version;
     return null;
 }
 
@@ -69,6 +72,7 @@ fn printHelp() void {
         \\  stats
         \\  validate
         \\  report
+        \\  version
         \\ 
         \\Implemented: all listed commands
         \\ 
@@ -925,6 +929,22 @@ fn nowUtcIsoTimestamp(allocator: std.mem.Allocator) ![]u8 {
             @as(u8, @intCast(second)),
         },
     );
+}
+
+fn parseMajorMinorVersion(allocator: std.mem.Allocator, raw: []const u8) !struct { major: u64, minor: u64, text: []u8 } {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    const dot_idx = std.mem.indexOfScalar(u8, trimmed, '.') orelse return error.InvalidVersionFormat;
+    if (dot_idx == 0 or dot_idx + 1 >= trimmed.len) return error.InvalidVersionFormat;
+    if (std.mem.indexOfScalarPos(u8, trimmed, dot_idx + 1, '.') != null) return error.InvalidVersionFormat;
+    const major_raw = trimmed[0..dot_idx];
+    const minor_raw = trimmed[dot_idx + 1 ..];
+    const major = std.fmt.parseInt(u64, major_raw, 10) catch return error.InvalidVersionFormat;
+    const minor = std.fmt.parseInt(u64, minor_raw, 10) catch return error.InvalidVersionFormat;
+    return .{
+        .major = major,
+        .minor = minor,
+        .text = try allocator.dupe(u8, trimmed),
+    };
 }
 
 fn parseIsoTimestampSeconds(raw: []const u8) ?i64 {
@@ -2682,6 +2702,36 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     }
 }
 
+fn cmdVersion(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+    const as_json = hasFlag(cmd_args, "--json");
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const version_path = try std.fs.path.join(allocator, &[_][]const u8{ repo, "VERSION" });
+    defer allocator.free(version_path);
+    const version_raw = std.fs.cwd().readFileAlloc(allocator, version_path, 1024) catch {
+        std.debug.print("missing VERSION file at project root: {s}\n", .{version_path});
+        std.process.exit(2);
+    };
+    defer allocator.free(version_raw);
+
+    const parsed = parseMajorMinorVersion(allocator, version_raw) catch {
+        std.debug.print("invalid VERSION format at project root (expected <major>.<minor>)\n", .{});
+        std.process.exit(2);
+    };
+    defer allocator.free(parsed.text);
+
+    if (as_json) {
+        try printStdout(
+            allocator,
+            "{{\"implementation\":\"zig-mt\",\"version\":\"{s}\",\"version_major\":{d},\"version_minor\":{d},\"build_tools\":{{\"zig\":\"{s}\"}}}}\n",
+            .{ parsed.text, parsed.major, parsed.minor, builtin.zig_version_string },
+        );
+    } else {
+        try printStdout(allocator, "zig-mt {s}\n", .{parsed.text});
+        try printStdout(allocator, "zig={s}\n", .{builtin.zig_version_string});
+    }
+}
+
 fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     const status_filter = getOptValue(cmd_args, "--status");
     if (status_filter != null and !statusAllowed(status_filter.?)) {
@@ -2892,5 +2942,6 @@ pub fn main() !void {
         .stats => try cmdStats(allocator),
         .validate => try cmdValidate(allocator, args[2..]),
         .report => try cmdReport(allocator, args[2..]),
+        .version => try cmdVersion(allocator, args[2..]),
     }
 }

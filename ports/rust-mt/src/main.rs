@@ -167,12 +167,31 @@ enum Commands {
         #[arg(long, default_value_t = 30)]
         limit: i32,
     },
+    Version {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 const DEFAULT_STATES: &[&str] = &["ready", "claimed", "blocked", "needs_review", "done"];
 const DEFAULT_PRIORITIES: &[&str] = &["p0", "p1", "p2"];
 const DEFAULT_TYPES: &[&str] = &["spec", "code", "tests", "docs", "refactor", "chore"];
 const DEFAULT_EFFORTS: &[&str] = &["xs", "s", "m", "l"];
+
+fn root_version_components() -> Result<(u64, u64, String)> {
+    let raw = option_env!("MT_ROOT_VERSION").ok_or_else(|| anyhow!("missing MT_ROOT_VERSION build metadata"))?;
+    let trimmed = raw.trim();
+    let (major_raw, minor_raw) = trimmed
+        .split_once('.')
+        .ok_or_else(|| anyhow!("invalid root VERSION format in build metadata: {trimmed}"))?;
+    let major = major_raw
+        .parse::<u64>()
+        .with_context(|| format!("invalid major version in root VERSION: {major_raw}"))?;
+    let minor = minor_raw
+        .parse::<u64>()
+        .with_context(|| format!("invalid minor version in root VERSION: {minor_raw}"))?;
+    Ok((major, minor, format!("{major}.{minor}")))
+}
 
 fn priority_weight(priority: &str) -> i32 {
     match priority {
@@ -2063,6 +2082,34 @@ fn cmd_report(db: String, summary: bool, search: String, limit: i32) -> Result<i
     Ok(0)
 }
 
+fn cmd_version(as_json: bool) -> Result<i32> {
+    let (major, minor, version) = root_version_components()?;
+    let rustc_version = option_env!("MT_RUSTC_VERSION").unwrap_or("unknown");
+    let cargo_version = option_env!("MT_CARGO_VERSION").unwrap_or("unknown");
+
+    if as_json {
+        println!(
+            "{}",
+            json!({
+                "implementation": "rust-mt",
+                "version": version,
+                "version_major": major,
+                "version_minor": minor,
+                "build_tools": {
+                    "rustc": rustc_version,
+                    "cargo": cargo_version,
+                }
+            })
+        );
+    } else {
+        println!("rust-mt {}", version);
+        println!("rustc={}", rustc_version);
+        println!("cargo={}", cargo_version);
+    }
+
+    Ok(0)
+}
+
 fn run() -> Result<i32> {
     let cli = Cli::parse();
     match cli.command {
@@ -2165,6 +2212,7 @@ fn run() -> Result<i32> {
             search,
             limit,
         } => cmd_report(db, summary, search, limit),
+        Commands::Version { json } => cmd_version(json),
     }
 }
 

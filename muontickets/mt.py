@@ -55,6 +55,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 ID_RE = re.compile(r"^T-\d{6}$")
 TICKET_FILE_RE = re.compile(r"^(T-\d{6})\.md$")
+VERSION_RE = re.compile(r"^(\d+)\.(\d+)$")
 FRONTMATTER_BOUNDARY = "---"
 
 DEFAULT_STATES = ["ready", "claimed", "blocked", "needs_review", "done"]
@@ -197,6 +198,26 @@ def last_ticket_id_path(repo_root: str) -> str:
 
 def schema_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.json")
+
+def version_file_path(repo_root: str) -> str:
+    return os.path.join(repo_root, "VERSION")
+
+def parse_major_minor_version(raw: str) -> Tuple[int, int]:
+    text = (raw or "").strip()
+    match = VERSION_RE.fullmatch(text)
+    if not match:
+        raise ValueError("VERSION must match '<major>.<minor>' (example: 0.1)")
+    major = int(match.group(1))
+    minor = int(match.group(2))
+    return major, minor
+
+def load_repo_version(repo_root: str) -> Tuple[int, int]:
+    path = version_file_path(repo_root)
+    if not os.path.isfile(path):
+        raise ValueError(f"Missing VERSION file at project root: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        raw = f.read()
+    return parse_major_minor_version(raw)
 
 @dataclass
 class Ticket:
@@ -1543,6 +1564,33 @@ def cmd_report(args: argparse.Namespace) -> int:
         conn.close()
     return 0
 
+def cmd_version(args: argparse.Namespace) -> int:
+    repo = find_repo_root()
+    major, minor = load_repo_version(repo)
+    version_text = f"{major}.{minor}"
+    payload = {
+        "implementation": "mt.py",
+        "version": version_text,
+        "version_major": major,
+        "version_minor": minor,
+        "build_tools": {
+            "python": sys.version.split()[0],
+        },
+        "runtime": {
+            "python_executable": sys.executable,
+            "platform": sys.platform,
+        },
+    }
+
+    if args.json:
+        print(json.dumps(payload, sort_keys=True))
+    else:
+        print(f"mt.py {version_text}")
+        print(f"python={payload['build_tools']['python']}")
+        print(f"python_executable={payload['runtime']['python_executable']}")
+        print(f"platform={payload['runtime']['platform']}")
+    return 0
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mt", description="MuonTickets CLI (file-based agent tickets).")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1663,6 +1711,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--search", default="", help="Search string for id/title/body/labels/tags")
     p_report.add_argument("--limit", type=int, default=30, help="Max rows for search output")
     p_report.set_defaults(func=cmd_report)
+
+    p_version = sub.add_parser("version", help="Show CLI version and build/runtime tool metadata.")
+    p_version.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
+    p_version.set_defaults(func=cmd_version)
 
     return p
 

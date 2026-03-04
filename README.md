@@ -54,6 +54,25 @@ uv run python3 mt.py --help
 uv run python3 mt.py report --summary
 ```
 
+## Version and Build Info (Bug Reports)
+
+MuonTickets now uses the project-root `VERSION` file (`major.minor`) as the source of CLI version output.
+
+Use these commands when filing bug reports from the field:
+
+```bash
+# Python reference CLI
+uv run python3 mt.py version --json
+
+# Rust port (build from source)
+ports/rust-mt/target/release/mt-port version --json
+
+# Zig port (build from source)
+ports/zig-mt/zig-out/bin/mt-zig version --json
+```
+
+Each command emits parseable build info (implementation + semantic version + toolchain versions) to make reports reproducible.
+
 ## For Agents: Ticket Workflow
 
 Agent quick-reference guide: see [skills.md](skills.md) for install modes, command workflows, and best practices.

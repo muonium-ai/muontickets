@@ -2,6 +2,16 @@
 
 Developer utility scripts are organized under `tools/` and grouped by purpose.
 
+## Version + build metadata for bug reports
+
+```bash
+.venv/bin/python mt.py version --json
+ports/rust-mt/target/release/mt-port version --json
+ports/zig-mt/zig-out/bin/mt-zig version --json
+```
+
+All three commands source semantic version from root `VERSION` and include implementation-specific build tool versions.
+
 ## Benchmarks
 
 ### allocate-task single run

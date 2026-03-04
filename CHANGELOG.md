@@ -16,6 +16,8 @@ Example:
 
 ## Unreleased
 
+- 2026-03-04 | Added | Added `rust-mt version` and `zig-mt version` outputs sourced from root `VERSION`, including compiler/build-tool metadata (`rustc`/`cargo` and `zig`)
+- 2026-03-04 | Added | Added `mt version` command backed by root `VERSION` file with JSON/plain build-info output (`python` tool version, executable, platform)
 - 2026-03-04 | Docs | Moved reusable Python utility scripts from `tmp/` into `tools/` (benchmarks, swarm compare, conformance compare, ticket seeders) and added `tools/USAGE.md`
 - 2026-03-03 | Docs | Updated project objective, skills guide, and ticket template with queue operator lifecycle guidance (`allocate-task`, `comment`, `fail-task`, triage of `tickets/errors`)
 - 2026-03-03 | Docs | Updated parity documentation with queue command support (`allocate-task`/`fail-task`) and documented `report` indexing of `tickets/errors`
