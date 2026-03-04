@@ -400,7 +400,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.debug.print("--label requires a value\n", .{});
                 std.process.exit(2);
             }
-            try labels.append(allocator, try allocator.dupe(u8, cmd_args[i + 1]));
+            try labels.append(try allocator.dupe(u8, cmd_args[i + 1]));
             i += 1;
             continue;
         }
@@ -409,7 +409,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.debug.print("--tag requires a value\n", .{});
                 std.process.exit(2);
             }
-            try tags.append(allocator, try allocator.dupe(u8, cmd_args[i + 1]));
+            try tags.append(try allocator.dupe(u8, cmd_args[i + 1]));
             i += 1;
             continue;
         }
@@ -423,7 +423,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.debug.print("invalid dependency ticket id: {s}\n", .{dep_id});
                 std.process.exit(2);
             }
-            try depends_on.append(allocator, try allocator.dupe(u8, dep_id));
+            try depends_on.append(try allocator.dupe(u8, dep_id));
             i += 1;
             continue;
         }
@@ -479,13 +479,13 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             const raw = parseMetaField(tpl, "labels") orelse "[]";
             var vals = try listItems(allocator, raw);
             defer freeListItems(allocator, &vals);
-            for (vals.items) |v| try labels.append(allocator, try allocator.dupe(u8, v));
+            for (vals.items) |v| try labels.append(try allocator.dupe(u8, v));
         }
         if (tags.items.len == 0) {
             const raw = parseMetaField(tpl, "tags") orelse "[]";
             var vals = try listItems(allocator, raw);
             defer freeListItems(allocator, &vals);
-            for (vals.items) |v| try tags.append(allocator, try allocator.dupe(u8, v));
+            for (vals.items) |v| try tags.append(try allocator.dupe(u8, v));
         }
         if (depends_on.items.len == 0) {
             const raw = parseMetaField(tpl, "depends_on") orelse "[]";
@@ -496,7 +496,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                     std.debug.print("invalid dependency ticket id from template: {s}\n", .{v});
                     std.process.exit(2);
                 }
-                try depends_on.append(allocator, try allocator.dupe(u8, v));
+                try depends_on.append(try allocator.dupe(u8, v));
             }
         }
     }
@@ -671,14 +671,14 @@ fn isIsoDateString(v: []const u8) bool {
 fn bodyExcerptFirstLines(allocator: std.mem.Allocator, body: []const u8, max_lines: usize) ![]u8 {
     const trimmed = std.mem.trim(u8, body, " \t\r\n");
     var out = try std.ArrayList(u8).initCapacity(allocator, @min(trimmed.len, 1024));
-    errdefer out.deinit(allocator);
+    errdefer out.deinit();
 
     var it = std.mem.splitScalar(u8, trimmed, '\n');
     var count: usize = 0;
     while (it.next()) |line| {
         if (count >= max_lines) break;
-        if (count > 0) try out.append(allocator, '\n');
-        try out.appendSlice(allocator, std.mem.trimRight(u8, line, " \t\r"));
+        if (count > 0) try out.append('\n');
+        try out.appendSlice(std.mem.trimRight(u8, line, " \t\r"));
         count += 1;
     }
     return out.toOwnedSlice(allocator);
@@ -689,37 +689,37 @@ fn listJsonFromRaw(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     defer freeListItems(allocator, &vals);
 
     var out = try std.ArrayList(u8).initCapacity(allocator, raw.len + 8);
-    errdefer out.deinit(allocator);
-    try out.append(allocator, '[');
+    errdefer out.deinit();
+    try out.append('[');
     for (vals.items, 0..) |v, idx| {
-        if (idx > 0) try out.appendSlice(allocator, ", ");
+        if (idx > 0) try out.appendSlice(", ");
         try appendJsonString(allocator, &out, v);
     }
-    try out.append(allocator, ']');
+    try out.append(']');
     return out.toOwnedSlice(allocator);
 }
 
 fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
-    try out.append(allocator, '"');
+    try out.append('"');
     for (value) |ch| {
         switch (ch) {
-            '"' => try out.appendSlice(allocator, "\\\""),
-            '\\' => try out.appendSlice(allocator, "\\\\"),
-            '\n' => try out.appendSlice(allocator, "\\n"),
-            '\r' => try out.appendSlice(allocator, "\\r"),
-            '\t' => try out.appendSlice(allocator, "\\t"),
+            '"' => try out.appendSlice("\\\""),
+            '\\' => try out.appendSlice("\\\\"),
+            '\n' => try out.appendSlice("\\n"),
+            '\r' => try out.appendSlice("\\r"),
+            '\t' => try out.appendSlice("\\t"),
             else => {
                 if (ch < 0x20) {
                     const esc = try std.fmt.allocPrint(allocator, "\\u{X:0>4}", .{@as(u32, ch)});
                     defer allocator.free(esc);
-                    try out.appendSlice(allocator, esc);
+                    try out.appendSlice(esc);
                 } else {
-                    try out.append(allocator, ch);
+                    try out.append(ch);
                 }
             },
         }
     }
-    try out.append(allocator, '"');
+    try out.append('"');
 }
 
 fn parseListContains(content: []const u8, key: []const u8, target: []const u8) bool {
@@ -742,19 +742,19 @@ fn listItems(allocator: std.mem.Allocator, raw_list: []const u8) !std.ArrayList(
     while (it.next()) |item| {
         const value = std.mem.trim(u8, item, " \t\r\"'");
         if (value.len == 0) continue;
-        try out.append(allocator, try allocator.dupe(u8, value));
+        try out.append(try allocator.dupe(u8, value));
     }
     return out;
 }
 
 fn freeListItems(allocator: std.mem.Allocator, items: *std.ArrayList([]u8)) void {
     for (items.items) |v| allocator.free(v);
-    items.deinit(allocator);
+    items.deinit();
 }
 
 fn setMetaField(allocator: std.mem.Allocator, content: []const u8, key: []const u8, value: []const u8) ![]u8 {
     var out = try std.ArrayList(u8).initCapacity(allocator, content.len + 64);
-    errdefer out.deinit(allocator);
+    errdefer out.deinit();
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     var in_frontmatter = false;
@@ -767,33 +767,33 @@ fn setMetaField(allocator: std.mem.Allocator, content: []const u8, key: []const 
                 in_frontmatter = true;
             } else {
                 if (!replaced) {
-                    try out.appendSlice(allocator, key);
-                    try out.appendSlice(allocator, ": ");
-                    try out.appendSlice(allocator, value);
-                    try out.append(allocator, '\n');
+                    try out.appendSlice(key);
+                    try out.appendSlice(": ");
+                    try out.appendSlice(value);
+                    try out.append('\n');
                     replaced = true;
                 }
                 in_frontmatter = false;
             }
-            try out.appendSlice(allocator, line);
-            try out.append(allocator, '\n');
+            try out.appendSlice(line);
+            try out.append('\n');
             continue;
         }
 
         if (in_frontmatter and std.mem.startsWith(u8, std.mem.trimLeft(u8, line, " \t"), key)) {
             const t = std.mem.trimLeft(u8, line, " \t");
             if (t.len > key.len and t[key.len] == ':') {
-                try out.appendSlice(allocator, key);
-                try out.appendSlice(allocator, ": ");
-                try out.appendSlice(allocator, value);
-                try out.append(allocator, '\n');
+                try out.appendSlice(key);
+                try out.appendSlice(": ");
+                try out.appendSlice(value);
+                try out.append('\n');
                 replaced = true;
                 continue;
             }
         }
 
-        try out.appendSlice(allocator, line);
-        try out.append(allocator, '\n');
+        try out.appendSlice(line);
+        try out.append('\n');
     }
 
     if (!replaced) {
@@ -983,11 +983,11 @@ fn appendIncident(allocator: std.mem.Allocator, repo: []const u8, message: []con
     defer allocator.free(incidents_path);
 
     var out = std.ArrayList(u8).empty;
-    defer out.deinit(allocator);
+    defer out.deinit();
     if (fileExists(incidents_path)) {
         const existing = try std.fs.cwd().readFileAlloc(allocator, incidents_path, 1024 * 1024);
         defer allocator.free(existing);
-        try out.appendSlice(allocator, existing);
+        try out.appendSlice(existing);
     }
 
     const now_iso = try nowUtcIsoTimestamp(allocator);
@@ -1028,24 +1028,24 @@ fn computePickScore(repo: []const u8, allocator: std.mem.Allocator, content: []c
 
 fn listLiteral(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
     var out = try std.ArrayList(u8).initCapacity(allocator, 32 + (items.len * 16));
-    errdefer out.deinit(allocator);
-    try out.append(allocator, '[');
+    errdefer out.deinit();
+    try out.append('[');
     for (items, 0..) |item, idx| {
-        if (idx > 0) try out.appendSlice(allocator, ", ");
+        if (idx > 0) try out.appendSlice(", ");
         const trimmed = std.mem.trim(u8, item, " \t\r");
         const needs_quote =
             (trimmed.len != item.len) or
             (std.mem.indexOfScalar(u8, item, ':') != null) or
             (std.mem.indexOfScalar(u8, item, '"') != null);
         if (needs_quote) {
-            try out.append(allocator, '"');
-            try out.appendSlice(allocator, item);
-            try out.append(allocator, '"');
+            try out.append('"');
+            try out.appendSlice(item);
+            try out.append('"');
         } else {
-            try out.appendSlice(allocator, item);
+            try out.appendSlice(item);
         }
     }
-    try out.append(allocator, ']');
+    try out.append(']');
     return out.toOwnedSlice(allocator);
 }
 
@@ -1059,14 +1059,14 @@ fn transitionAllowed(old: []const u8, new: []const u8) bool {
 
 fn defaultBranch(allocator: std.mem.Allocator, id: []const u8, title: []const u8) ![]u8 {
     var buf = try std.ArrayList(u8).initCapacity(allocator, 64);
-    defer buf.deinit(allocator);
+    defer buf.deinit();
     for (title) |ch| {
         const lower_ch = std.ascii.toLower(ch);
         if ((lower_ch >= 'a' and lower_ch <= 'z') or (lower_ch >= '0' and lower_ch <= '9')) {
-            try buf.append(allocator, lower_ch);
+            try buf.append(lower_ch);
         } else {
             if (buf.items.len == 0 or buf.items[buf.items.len - 1] != '-') {
-                try buf.append(allocator, '-');
+                try buf.append('-');
             }
         }
         if (buf.items.len >= 40) break;
@@ -1265,7 +1265,7 @@ fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
     var dependents = try std.ArrayList([]const u8).initCapacity(allocator, 8);
     defer {
         for (dependents.items) |dep| allocator.free(dep);
-        dependents.deinit(allocator);
+        dependents.deinit();
     }
     var dir = try std.fs.cwd().openDir(tdir, .{ .iterate = true });
     defer dir.close();
@@ -1279,7 +1279,7 @@ fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
         defer allocator.free(tcontent);
         if (parseListContains(tcontent, "depends_on", id)) {
             const dep_id = parseMetaField(tcontent, "id") orelse entry.name[0..8];
-            try dependents.append(allocator, try allocator.dupe(u8, dep_id));
+            try dependents.append(try allocator.dupe(u8, dep_id));
         }
     }
 
@@ -1335,7 +1335,7 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     var errors = try std.ArrayList([]u8).initCapacity(allocator, 16);
     defer {
         for (errors.items) |e| allocator.free(e);
-        errors.deinit(allocator);
+        errors.deinit();
     }
 
     var owner_claims = std.StringHashMap(u32).init(allocator);
@@ -1357,7 +1357,7 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
 
         if (frontmatterParseError(content)) |fm_err| {
             const msg = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ entry.name, fm_err });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
             continue;
         }
 
@@ -1380,18 +1380,18 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             defer freeListItems(allocator, &deps);
             if (deps.items.len > 0) {
                 var missing = try std.ArrayList(u8).initCapacity(allocator, 32);
-                defer missing.deinit(allocator);
+                defer missing.deinit();
                 var first = true;
                 for (deps.items) |dep| {
                     if (!depDone(repo, allocator, dep)) {
-                        if (!first) try missing.appendSlice(allocator, ", ");
+                        if (!first) try missing.appendSlice(", ");
                         first = false;
-                        try missing.appendSlice(allocator, dep);
+                        try missing.appendSlice(dep);
                     }
                 }
                 if (missing.items.len > 0) {
                     const msg = try std.fmt.allocPrint(allocator, "{s} status {s} but deps not done: [{s}]", .{ id, status, missing.items });
-                    try errors.append(allocator, msg);
+                    try errors.append(msg);
                 }
             }
         }
@@ -1401,7 +1401,7 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     while (owner_it.next()) |entry| {
         if (entry.value_ptr.* > max_claimed) {
             const msg = try std.fmt.allocPrint(allocator, "owner '{s}' has {d} claimed tickets (max {d})", .{ entry.key_ptr.*, entry.value_ptr.*, max_claimed });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
     }
 
@@ -1417,7 +1417,7 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
 
         if (frontmatterParseError(content)) |fm_err| {
             const msg = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ entry.name, fm_err });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
             continue;
         }
 
@@ -1436,73 +1436,73 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         for (required_fields) |field| {
             if (!metaFieldRequired(content, field)) {
                 const msg = try std.fmt.allocPrint(allocator, "{s}: missing required field '{s}'", .{ entry.name, field });
-                try errors.append(allocator, msg);
+                try errors.append(msg);
             }
         }
 
         if (!isTicketId(id)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: field 'id' does not match pattern ^T-\\d{{6}}$, got '{s}'", .{ entry.name, id });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         if (std.mem.trim(u8, title, " \t\r").len < 3) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: field 'title' too short (min 3)", .{entry.name});
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         if (!priorityAllowed(priority)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: field 'priority' must be one of [p0, p1, p2], got '{s}'", .{ entry.name, priority });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         const type_ok = std.mem.eql(u8, ticket_type, "spec") or std.mem.eql(u8, ticket_type, "code") or std.mem.eql(u8, ticket_type, "tests") or std.mem.eql(u8, ticket_type, "docs") or std.mem.eql(u8, ticket_type, "refactor") or std.mem.eql(u8, ticket_type, "chore");
         if (!type_ok) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: field 'type' must be one of [spec, code, tests, docs, refactor, chore], got '{s}'", .{ entry.name, ticket_type });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         const labels_raw = parseMetaField(content, "labels") orelse "[]";
         if (!looksLikeListLiteral(labels_raw)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: field 'labels' must be an array/list", .{entry.name});
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         if (!isNullOrNonEmpty(owner)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: field 'owner' must satisfy oneOf, got '{s}'", .{ entry.name, owner });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         if (!isIsoDateString(created)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: field 'created' does not match pattern ^\\d{{4}}-\\d{{2}}-\\d{{2}}$, got '{s}'", .{ entry.name, created });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         if (!isIsoDateString(updated)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: field 'updated' does not match pattern ^\\d{{4}}-\\d{{2}}-\\d{{2}}$, got '{s}'", .{ entry.name, updated });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         const depends_raw = parseMetaField(content, "depends_on") orelse "[]";
         if (!looksLikeListLiteral(depends_raw)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: field 'depends_on' must be an array/list", .{entry.name});
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         if (!isNullOrNonEmpty(branch)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: field 'branch' must satisfy oneOf, got '{s}'", .{ entry.name, branch });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         if (isIsoDateString(created) and isIsoDateString(updated) and std.mem.order(u8, updated, created) == .lt) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: updated ({s}) is earlier than created ({s})", .{ entry.name, updated, created });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
 
         if (!statusAllowed(status)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: invalid status {s}", .{ entry.name, status });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         if (!effortAllowed(effort)) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: effort must be one of xs,s,m,l, got {s}", .{ entry.name, effort });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         if (std.mem.eql(u8, status, "claimed") and std.mem.eql(u8, owner, "null")) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: claimed ticket must have owner", .{entry.name});
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
         if ((std.mem.eql(u8, status, "needs_review") or std.mem.eql(u8, status, "done")) and std.mem.eql(u8, branch, "null")) {
             const msg = try std.fmt.allocPrint(allocator, "{s}: status {s} should have branch set", .{ entry.name, status });
-            try errors.append(allocator, msg);
+            try errors.append(msg);
         }
 
         const deps_raw = parseMetaField(content, "depends_on") orelse "[]";
@@ -1519,10 +1519,10 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                     defer allocator.free(dep_archived);
                     if (fileExists(dep_archived)) {
                         const msg = try std.fmt.allocPrint(allocator, "{s} depends_on archived ticket {s} (fix by unarchiving {s} or removing/updating {s}.depends_on; avoid mt archive --force when active dependents exist)", .{ id, dep, dep, id });
-                        try errors.append(allocator, msg);
+                        try errors.append(msg);
                     } else {
                         const msg = try std.fmt.allocPrint(allocator, "{s} depends_on missing ticket {s}", .{ id, dep });
-                        try errors.append(allocator, msg);
+                        try errors.append(msg);
                     }
                 }
             }
@@ -1555,15 +1555,15 @@ fn cmdComment(allocator: std.mem.Allocator, id: []const u8, text: []const u8) !v
     defer allocator.free(content);
 
     var out = try std.ArrayList(u8).initCapacity(allocator, content.len + text.len + 128);
-    defer out.deinit(allocator);
-    try out.appendSlice(allocator, content);
+    defer out.deinit();
+    try out.appendSlice(content);
     if (!std.mem.containsAtLeast(u8, content, 1, "## Progress Log")) {
-        if (!std.mem.endsWith(u8, content, "\n")) try out.append(allocator, '\n');
-        try out.appendSlice(allocator, "\n## Progress Log\n");
+        if (!std.mem.endsWith(u8, content, "\n")) try out.append('\n');
+        try out.appendSlice("\n## Progress Log\n");
     }
-    try out.appendSlice(allocator, "- 1970-01-01: ");
-    try out.appendSlice(allocator, text);
-    try out.append(allocator, '\n');
+    try out.appendSlice("- 1970-01-01: ");
+    try out.appendSlice(text);
+    try out.append('\n');
 
     try std.fs.cwd().writeFile(path, out.items);
     std.debug.print("commented on {s}\n", .{id});
@@ -1594,9 +1594,9 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     };
 
     var required_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
-    defer required_labels.deinit(allocator);
+    defer required_labels.deinit();
     var avoid_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
-    defer avoid_labels.deinit(allocator);
+    defer avoid_labels.deinit();
     var arg_i: usize = 0;
     while (arg_i < cmd_args.len) : (arg_i += 1) {
         const a = cmd_args[arg_i];
@@ -1605,7 +1605,7 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.debug.print("--label requires a value\n", .{});
                 std.process.exit(2);
             }
-            try required_labels.append(allocator, cmd_args[arg_i + 1]);
+            try required_labels.append(cmd_args[arg_i + 1]);
             arg_i += 1;
             continue;
         }
@@ -1614,7 +1614,7 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.debug.print("--avoid-label requires a value\n", .{});
                 std.process.exit(2);
             }
-            try avoid_labels.append(allocator, cmd_args[arg_i + 1]);
+            try avoid_labels.append(cmd_args[arg_i + 1]);
             arg_i += 1;
             continue;
         }
@@ -1804,9 +1804,9 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
     if (lease_minutes < 1) lease_minutes = 1;
 
     var required_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
-    defer required_labels.deinit(allocator);
+    defer required_labels.deinit();
     var avoid_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
-    defer avoid_labels.deinit(allocator);
+    defer avoid_labels.deinit();
     var arg_i: usize = 0;
     while (arg_i < cmd_args.len) : (arg_i += 1) {
         const a = cmd_args[arg_i];
@@ -1815,7 +1815,7 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
                 std.debug.print("--label requires a value\n", .{});
                 std.process.exit(2);
             }
-            try required_labels.append(allocator, cmd_args[arg_i + 1]);
+            try required_labels.append(cmd_args[arg_i + 1]);
             arg_i += 1;
             continue;
         }
@@ -1824,7 +1824,7 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
                 std.debug.print("--avoid-label requires a value\n", .{});
                 std.process.exit(2);
             }
-            try avoid_labels.append(allocator, cmd_args[arg_i + 1]);
+            try avoid_labels.append(cmd_args[arg_i + 1]);
             arg_i += 1;
             continue;
         }
@@ -2250,47 +2250,47 @@ fn cmdExport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         defer allocator.free(depends_json);
 
         var line = try std.ArrayList(u8).initCapacity(allocator, 512);
-        defer line.deinit(allocator);
-        try line.append(allocator, '{');
-        try line.appendSlice(allocator, "\"id\": ");
+        defer line.deinit();
+        try line.append('{');
+        try line.appendSlice("\"id\": ");
         try appendJsonString(allocator, &line, id);
-        try line.appendSlice(allocator, ", \"title\": ");
+        try line.appendSlice(", \"title\": ");
         try appendJsonString(allocator, &line, title);
-        try line.appendSlice(allocator, ", \"status\": ");
+        try line.appendSlice(", \"status\": ");
         try appendJsonString(allocator, &line, status);
-        try line.appendSlice(allocator, ", \"priority\": ");
+        try line.appendSlice(", \"priority\": ");
         try appendJsonString(allocator, &line, priority);
-        try line.appendSlice(allocator, ", \"type\": ");
+        try line.appendSlice(", \"type\": ");
         try appendJsonString(allocator, &line, tp);
-        try line.appendSlice(allocator, ", \"effort\": ");
+        try line.appendSlice(", \"effort\": ");
         try appendJsonString(allocator, &line, effort);
-        try line.appendSlice(allocator, ", \"labels\": ");
-        try line.appendSlice(allocator, labels_json);
-        try line.appendSlice(allocator, ", \"tags\": ");
-        try line.appendSlice(allocator, tags_json);
-        try line.appendSlice(allocator, ", \"owner\": ");
+        try line.appendSlice(", \"labels\": ");
+        try line.appendSlice(labels_json);
+        try line.appendSlice(", \"tags\": ");
+        try line.appendSlice(tags_json);
+        try line.appendSlice(", \"owner\": ");
         if (std.mem.eql(u8, owner, "null")) {
-            try line.appendSlice(allocator, "null");
+            try line.appendSlice("null");
         } else {
             try appendJsonString(allocator, &line, owner);
         }
-        try line.appendSlice(allocator, ", \"created\": ");
+        try line.appendSlice(", \"created\": ");
         try appendJsonString(allocator, &line, created);
-        try line.appendSlice(allocator, ", \"updated\": ");
+        try line.appendSlice(", \"updated\": ");
         try appendJsonString(allocator, &line, updated);
-        try line.appendSlice(allocator, ", \"depends_on\": ");
-        try line.appendSlice(allocator, depends_json);
-        try line.appendSlice(allocator, ", \"branch\": ");
+        try line.appendSlice(", \"depends_on\": ");
+        try line.appendSlice(depends_json);
+        try line.appendSlice(", \"branch\": ");
         if (std.mem.eql(u8, branch, "null")) {
-            try line.appendSlice(allocator, "null");
+            try line.appendSlice("null");
         } else {
             try appendJsonString(allocator, &line, branch);
         }
-        try line.appendSlice(allocator, ", \"excerpt\": ");
+        try line.appendSlice(", \"excerpt\": ");
         try appendJsonString(allocator, &line, excerpt);
-        try line.appendSlice(allocator, ", \"path\": ");
+        try line.appendSlice(", \"path\": ");
         try appendJsonString(allocator, &line, rel_path);
-        try line.append(allocator, '}');
+        try line.append('}');
 
         if (std.mem.eql(u8, format, "json")) {
             if (!first) try printStdout(allocator, ",\n", .{});
@@ -2471,7 +2471,7 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             allocator.free(row.path);
             allocator.free(row.body);
         }
-        rows.deinit(allocator);
+        rows.deinit();
 
         var key_it = seen_paths.keyIterator();
         while (key_it.next()) |k| allocator.free(k.*);
@@ -2503,7 +2503,7 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             if (seen_paths.contains(rel)) continue;
             try seen_paths.put(try allocator.dupe(u8, rel), {});
 
-            try rows.append(allocator, .{
+            try rows.append(.{
                 .id = try allocator.dupe(u8, parseMetaField(content, "id") orelse base[0..8]),
                 .title = try allocator.dupe(u8, parseMetaField(content, "title") orelse ""),
                 .status = try allocator.dupe(u8, parseMetaField(content, "status") orelse ""),
@@ -2751,7 +2751,7 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     }
     const show_invalid = hasFlag(cmd_args, "--show-invalid");
     var required_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
-    defer required_labels.deinit(allocator);
+    defer required_labels.deinit();
     var label_i: usize = 0;
     while (label_i < cmd_args.len) : (label_i += 1) {
         if (std.mem.eql(u8, cmd_args[label_i], "--label")) {
@@ -2759,7 +2759,7 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 std.debug.print("--label requires a value\n", .{});
                 std.process.exit(2);
             }
-            try required_labels.append(allocator, cmd_args[label_i + 1]);
+            try required_labels.append(cmd_args[label_i + 1]);
             label_i += 1;
         }
     }
