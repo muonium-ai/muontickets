@@ -76,7 +76,7 @@ jobs:
         run: |
           rm -f dist/SHA256SUMS
           shopt -s nullglob
-          for artifact in dist/*.tar.gz; do
+          for artifact in dist/*.tar.gz dist/*.zip; do
             shasum -a 256 "$artifact" >> dist/SHA256SUMS
           done
 

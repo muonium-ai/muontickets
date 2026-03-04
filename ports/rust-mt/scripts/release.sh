@@ -40,7 +40,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 mkdir -p "$DIST_DIR"
-rm -rf "$DIST_DIR"/mt-rust-* "$DIST_DIR"/SHA256SUMS
+rm -rf "$DIST_DIR"/mt-rust-* "$DIST_DIR"/mt-rust-*.tar.gz "$DIST_DIR"/mt-rust-*.zip "$DIST_DIR"/SHA256SUMS
 
 native_label() {
   local os arch
@@ -111,17 +111,25 @@ for target in "${TARGETS[@]}"; do
   cp "$bin_path" "$pkg_dir/mt$ext"
   cp "$ROOT_DIR/README.md" "$pkg_dir/README.md"
 
-  (
-    cd "$DIST_DIR"
-    rm -f "$pkg_name.tar.gz"
-    tar -czf "$pkg_name.tar.gz" "$pkg_name"
-  )
+  if [[ "$target" == *windows* || "$pkg_target" == *-windows ]]; then
+    (
+      cd "$DIST_DIR"
+      rm -f "$pkg_name.zip"
+      zip -q -r "$pkg_name.zip" "$pkg_name"
+    )
+  else
+    (
+      cd "$DIST_DIR"
+      rm -f "$pkg_name.tar.gz"
+      tar -czf "$pkg_name.tar.gz" "$pkg_name"
+    )
+  fi
 done
 
 (
   cd "$DIST_DIR"
   rm -f SHA256SUMS
-  for artifact in *.tar.gz; do
+  for artifact in *.tar.gz *.zip; do
     [[ -e "$artifact" ]] || continue
     shasum -a 256 "$artifact" >> SHA256SUMS
   done

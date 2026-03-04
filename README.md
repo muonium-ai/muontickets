@@ -192,6 +192,22 @@ By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data
 
 ## Rust Binary Releases (Preview)
 
+Unified multi-platform release (Rust + Zig together):
+
+```bash
+# Push a tag like v0.9.0 to build Linux/macOS/Windows native artifacts
+git tag v0.9.0
+git push origin v0.9.0
+```
+
+This triggers `.github/workflows/platform-release.yml` and publishes release assets for both implementations:
+
+- `mt-rust-<arch>-<os>.tar.gz` (Linux/macOS)
+- `mt-rust-<arch>-windows.zip` (Windows)
+- `mt-zig-<arch>-<os>.tar.gz` (Linux/macOS)
+- `mt-zig-<arch>-windows.zip` (Windows)
+- `SHA256SUMS`, `SHA256SUMS.sig`, `SHA256SUMS.pem`
+
 Package-manager path (Cargo):
 
 ```bash

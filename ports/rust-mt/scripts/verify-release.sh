@@ -57,7 +57,7 @@ fi
     --signature SHA256SUMS.sig \
     --certificate SHA256SUMS.pem \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/rust-release.yml@refs/(tags/rust-v.*|heads/main)$' \
+    --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(rust-release|platform-release).yml@refs/(tags/(rust-v.*|v.*)|heads/main)$' \
     SHA256SUMS
 )
 

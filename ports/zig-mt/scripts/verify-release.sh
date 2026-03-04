@@ -68,7 +68,7 @@ done
     --signature SHA256SUMS.sig \
     --certificate SHA256SUMS.pem \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/zig-release.yml@refs/(tags/zig-v.*|heads/main)$' \
+    --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(zig-release|platform-release).yml@refs/(tags/(zig-v.*|v.*)|heads/main)$' \
     SHA256SUMS
 )
 

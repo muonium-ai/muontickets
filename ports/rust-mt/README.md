@@ -33,10 +33,13 @@ Optional explicit targets:
 ## CI publishing and signing
 
 - Workflow: `.github/workflows/rust-release.yml`
+- Unified workflow: `.github/workflows/platform-release.yml`
 - Triggers:
 	- Tag push matching `rust-v*` (build + publish)
 	- Manual dispatch (`workflow_dispatch`) with optional `publish=true`
+- Unified release trigger: tag push matching `v*` (build + publish Rust + Zig together)
 - Build output: native release artifacts from Linux/macOS/Windows runners, aggregated into release assets with combined `SHA256SUMS`
+- Archive formats: `.tar.gz` for Linux/macOS and `.zip` for Windows
 - Signing: CI performs keyless Sigstore signing of `SHA256SUMS` and publishes `SHA256SUMS.sig` + `SHA256SUMS.pem`
 - Smoke validation: CI runs conformance fixture `reporting_graph_pick.json` against built binary before publish
 
@@ -51,7 +54,7 @@ cosign verify-blob \
 	--signature SHA256SUMS.sig \
 	--certificate SHA256SUMS.pem \
 	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
-	--certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/rust-release.yml@refs/(tags/rust-v.*|heads/main)$' \
+	--certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(rust-release|platform-release).yml@refs/(tags/(rust-v.*|v.*)|heads/main)$' \
 	SHA256SUMS
 ```
 
