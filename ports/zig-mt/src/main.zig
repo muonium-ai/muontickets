@@ -207,7 +207,7 @@ fn writeLastTicketNumber(allocator: std.mem.Allocator, repo: []const u8, number:
     defer allocator.free(path);
     const text = try std.fmt.allocPrint(allocator, "T-{d:0>6}\n", .{number});
     defer allocator.free(text);
-    try std.fs.cwd().writeFile(path, text);
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = text });
 }
 
 fn scanMaxTicketNumber(allocator: std.mem.Allocator, repo: []const u8) !u32 {
@@ -289,7 +289,7 @@ fn writeTicketFile(allocator: std.mem.Allocator, path: []const u8, id: []const u
         .{ id, title, status, priority, ticket_type, effort, labels, today, today, body },
     );
     defer allocator.free(text);
-    try std.fs.cwd().writeFile(path, text);
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = text });
 }
 
 fn cmdInit(allocator: std.mem.Allocator) !void {
@@ -309,7 +309,7 @@ fn cmdInit(allocator: std.mem.Allocator) !void {
     const template_path = try std.fs.path.join(allocator, &[_][]const u8{ tickets_dir, "ticket.template" });
     defer allocator.free(template_path);
     if (!fileExists(template_path)) {
-        try std.fs.cwd().writeFile(template_path, default_template);
+        try std.fs.cwd().writeFile(.{ .sub_path = template_path, .data = default_template });
         try printStdout(allocator, "created {s}\n", .{template_path});
     }
 
@@ -584,7 +584,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(with_created);
     const with_updated = try setMetaField(allocator, with_created, "updated", today);
     defer allocator.free(with_updated);
-    try std.fs.cwd().writeFile(ticket_path, with_updated);
+    try std.fs.cwd().writeFile(.{ .sub_path = ticket_path, .data = with_updated });
 
     try printStdout(allocator, "{s}\n", .{ticket_path});
 }
@@ -993,7 +993,7 @@ fn appendIncident(allocator: std.mem.Allocator, repo: []const u8, message: []con
     const now_iso = try nowUtcIsoTimestamp(allocator);
     defer allocator.free(now_iso);
     try out.writer(allocator).print("{s} {s}\n", .{ now_iso, message });
-    try std.fs.cwd().writeFile(incidents_path, out.items);
+    try std.fs.cwd().writeFile(.{ .sub_path = incidents_path, .data = out.items });
 }
 
 fn computePickScore(repo: []const u8, allocator: std.mem.Allocator, content: []const u8, ignore_deps: bool) f64 {
@@ -1162,7 +1162,7 @@ fn cmdClaim(allocator: std.mem.Allocator, id: []const u8, owner: []const u8, bra
     defer allocator.free(branch);
     const next3 = try setMetaField(allocator, next2, "branch", branch);
     defer allocator.free(next3);
-    try std.fs.cwd().writeFile(path, next3);
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = next3 });
     try printStdout(allocator, "claimed {s} as {s} (branch: {s})\n", .{ id, owner, branch });
 }
 
@@ -1208,7 +1208,7 @@ fn cmdSetStatus(allocator: std.mem.Allocator, id: []const u8, new_status: []cons
     } else try allocator.dupe(u8, next);
     defer allocator.free(final_text);
 
-    try std.fs.cwd().writeFile(path, final_text);
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = final_text });
     try printStdout(allocator, "{s}: {s} -> {s}\n", .{ id, old, new_status });
 }
 
@@ -1233,7 +1233,7 @@ fn cmdDone(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
     }
     const next = try setMetaField(allocator, content, "status", "done");
     defer allocator.free(next);
-    try std.fs.cwd().writeFile(path, next);
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = next });
     try printStdout(allocator, "done {s}\n", .{id});
 }
 
@@ -1565,7 +1565,7 @@ fn cmdComment(allocator: std.mem.Allocator, id: []const u8, text: []const u8) !v
     try out.appendSlice(allocator, text);
     try out.append(allocator, '\n');
 
-    try std.fs.cwd().writeFile(path, out.items);
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = out.items });
     std.debug.print("commented on {s}\n", .{id});
 }
 
@@ -1762,7 +1762,7 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(score_text);
     const next4 = try setMetaField(allocator, next3, "score", score_text);
     defer allocator.free(next4);
-    try std.fs.cwd().writeFile(chosen.path, next4);
+    try std.fs.cwd().writeFile(.{ .sub_path = chosen.path, .data = next4 });
 
     if (json_out) {
         try printStdout(allocator, "{{\"picked\":\"{s}\",\"owner\":\"{s}\",\"branch\":\"{s}\",\"score\":{d:.1}}}\n", .{ chosen.id, owner, branch, chosen.score });
@@ -2024,7 +2024,7 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
     defer allocator.free(score_text);
     const next9 = try setMetaField(allocator, next8, "score", score_text);
     defer allocator.free(next9);
-    try std.fs.cwd().writeFile(chosen.path, next9);
+    try std.fs.cwd().writeFile(.{ .sub_path = chosen.path, .data = next9 });
 
     if (was_stale_reallocation) {
         const incident = try std.fmt.allocPrint(
@@ -2113,7 +2113,7 @@ fn cmdFailTask(allocator: std.mem.Allocator, id: []const u8, err_text: []const u
         defer allocator.free(blocked5);
         const blocked6 = try setMetaField(allocator, blocked5, "lease_expires_at", "null");
         defer allocator.free(blocked6);
-        try std.fs.cwd().writeFile(path, blocked6);
+        try std.fs.cwd().writeFile(.{ .sub_path = path, .data = blocked6 });
 
         const errors_dir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets", "errors" });
         defer allocator.free(errors_dir);
@@ -2150,7 +2150,7 @@ fn cmdFailTask(allocator: std.mem.Allocator, id: []const u8, err_text: []const u
     defer allocator.free(ready5);
     const ready6 = try setMetaField(allocator, ready5, "lease_expires_at", "null");
     defer allocator.free(ready6);
-    try std.fs.cwd().writeFile(path, ready6);
+    try std.fs.cwd().writeFile(.{ .sub_path = path, .data = ready6 });
     try printStdout(allocator, "{s} re-queued for retry ({d}/{d})\n", .{ id, retry_count, configured_retry_limit });
 }
 
