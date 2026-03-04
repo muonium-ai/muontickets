@@ -1,0 +1,148 @@
+name: parity
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Python unit tests
+        shell: bash
+        run: |
+          python -m unittest discover -s tests -p 'test_*.py'
+
+  conformance-parity:
+    runs-on: ubuntu-latest
+    needs: python-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.12.0
+
+      - name: Build Rust binary
+        shell: bash
+        run: |
+          cargo build --release --manifest-path ports/rust-mt/Cargo.toml
+
+      - name: Build Zig binary
+        working-directory: ports/zig-mt
+        shell: bash
+        run: |
+          zig build -Doptimize=ReleaseSafe
+
+      - name: Run conformance parity matrix
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+
+          root = Path('.').resolve()
+          runner = root / 'tests' / 'conformance' / 'runner.py'
+          fixture_dir = root / 'tests' / 'conformance' / 'fixtures'
+          summary_file = os.environ.get('GITHUB_STEP_SUMMARY', '')
+
+          fixtures_common = [
+              'core_workflow.json',
+              'reporting_graph_pick.json',
+              'options_parity.json',
+              'pick_scoring.json',
+              'queue_allocate_fail.json',
+          ]
+          fixtures_extra = {
+              'zig-mt': ['zig_reporting_graph_pick.json'],
+          }
+
+          targets = {
+              'mt.py': [sys.executable, str(root / 'mt.py')],
+              'rust-mt': [str(root / 'ports' / 'rust-mt' / 'target' / 'release' / 'mt-port')],
+              'zig-mt': [str(root / 'ports' / 'zig-mt' / 'zig-out' / 'bin' / 'mt-zig')],
+          }
+
+          rows = []
+          overall_failed = False
+
+          for name, cmd in targets.items():
+              fixture_list = list(fixtures_common)
+              fixture_list.extend(fixtures_extra.get(name, []))
+              passed = 0
+              failed = 0
+              failed_names = []
+              start = time.time()
+
+              for fixture in fixture_list:
+                  env = dict(os.environ)
+                  env['MT_CMD'] = ' '.join(cmd)
+                  proc = subprocess.run(
+                      [sys.executable, str(runner), '--fixture', str(fixture_dir / fixture)],
+                      cwd=str(root),
+                      env=env,
+                      capture_output=True,
+                      text=True,
+                  )
+                  if proc.returncode == 0:
+                      passed += 1
+                  else:
+                      failed += 1
+                      failed_names.append(fixture)
+                      print(f"[{name}] fixture failed: {fixture}", file=sys.stderr)
+                      if proc.stdout.strip():
+                          print(proc.stdout, file=sys.stderr)
+                      if proc.stderr.strip():
+                          print(proc.stderr, file=sys.stderr)
+
+              duration = time.time() - start
+              note = '' if not failed_names else ('failed: ' + ', '.join(failed_names))
+              status = 'PASS' if failed == 0 else 'FAIL'
+              if failed:
+                  overall_failed = True
+              rows.append((name, status, passed, failed, duration, note))
+
+          header = '| Target | Status | Fixtures Passed | Fixtures Failed | Duration (s) | Notes |\n|---|---:|---:|---:|---:|---|\n'
+          body = ''.join(
+              f"| {t} | {st} | {p} | {f} | {d:.2f} | {n} |\n"
+              for t, st, p, f, d, n in rows
+          )
+
+          print(header + body)
+
+          if summary_file:
+              with open(summary_file, 'a', encoding='utf-8') as f:
+                  f.write('## Conformance Parity Matrix\n\n')
+                  f.write(header)
+                  f.write(body)
+
+          if overall_failed:
+              raise SystemExit(1)
+          PY
