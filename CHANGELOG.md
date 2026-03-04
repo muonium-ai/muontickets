@@ -16,6 +16,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-04 | Changed | Updated ticket metadata defaults to UTC timestamps (`created`/`updated`) and expanded template/runtime fields (`retry_*`, allocation/lease fields, last error/attempt) with backward-compatible schema validation
 - 2026-03-04 | Docs | Added end-to-end onboarding docs for installing MuonTickets as a git submodule in a new project, plus template-driven agent ticket creation workflow updates across README/skills/agent snippets
 - 2026-03-04 | Docs | Added `RELEASE_CHECKLIST.md` with end-to-end unified `v*` release runbook (preflight, tagging, asset verification, platform smoke checks)
 - 2026-03-04 | Added | Added unified `.github/workflows/combined-release.yml` to publish combined Rust + Zig Linux/macOS/Windows native artifacts on `v*` tags with signed `SHA256SUMS`

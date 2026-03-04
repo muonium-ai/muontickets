@@ -177,6 +177,8 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
 - `mt new "Title"` uses template defaults when available.
 - CLI args override template values when provided (for example: `--priority`, `--type`, `--effort`, `--label`, `--tag`, `--depends-on`, `--goal`).
 - Existing `tickets/ticket.template` files are never overwritten by installer/init.
+- `created` and `updated` metadata are timestamp-based (`YYYY-MM-DDTHH:MM:SSZ`).
+- Queue/runtime fields are supported in template defaults: `retry_count`, `retry_limit`, `allocated_to`, `allocated_at`, `lease_expires_at`, `last_error`, `last_attempted_at`.
 
 Examples:
 

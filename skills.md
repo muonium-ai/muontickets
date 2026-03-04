@@ -294,6 +294,8 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py archive T-000123
 - `mt new` uses template defaults when present.
 - CLI arguments override template defaults for one-off needs.
 - `mt init` creates `tickets/ticket.template` only if missing; existing templates are preserved.
+- `created`/`updated` use UTC timestamp format (`YYYY-MM-DDTHH:MM:SSZ`); schema accepts legacy date-only values for backward compatibility.
+- Queue metadata can be pre-seeded in template defaults (`retry_count`, `retry_limit`, `allocated_to`, `allocated_at`, `lease_expires_at`, `last_error`, `last_attempted_at`).
 
 Example customization flow:
 

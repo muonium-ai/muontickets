@@ -457,8 +457,8 @@ effort: s
 labels: []
 tags: []
 owner: null
-created: 1970-01-01
-updated: 1970-01-01
+created: 1970-01-01T00:00:00Z
+updated: 1970-01-01T00:00:00Z
 depends_on: []
 branch: null
 retry_count: 0
@@ -477,6 +477,20 @@ Write a single-sentence goal.
 - [ ] Define clear, testable checks (2–5 items)
 
 ## Notes
+
+## Agent Assignment
+- Suggested owner: agent-name
+- Suggested branch: feature/short-name
+
+## Implementation Plan
+- [ ] Describe 2-4 concrete execution steps
+- [ ] List test/validation commands to run
+- [ ] Note any dependency handoff requirements
+
+## Queue Lifecycle (if allocated)
+- [ ] Add progress with `mt comment <id> "..."`
+- [ ] If blocked/failing, run `mt fail-task <id> --error "..."`
+- [ ] On completion, move to `needs_review` then `done`
 """
 
 def ensure_ticket_template(repo_root: str) -> bool:
@@ -544,21 +558,20 @@ def compute_score(meta: Dict[str, Any], id_to_meta: Dict[str, Dict[str, Any]]) -
     - priority (p0 highest)
     - smaller effort preferred (xs > s > m > l)
     - fewer dependencies preferred
-    - older tickets preferred (created date)
+    - older tickets preferred (created timestamp)
     """
     pr = str(meta.get("priority", "p2"))
     eff = str(meta.get("effort", "s"))
     deps = meta.get("depends_on") or []
-    created = str(meta.get("created", "1970-01-01"))
+    created = str(meta.get("created", "1970-01-01T00:00:00Z"))
 
     base = PRIORITY_WEIGHT.get(pr, 0) + EFFORT_WEIGHT.get(eff, 0)
     dep_penalty = 5 * len(deps)
-    # Older = slightly higher (invert date lexicographically)
-    try:
-        dt = _dt.date.fromisoformat(created)
-        age_days = (_dt.date.today() - dt).days
-    except Exception:
+    created_dt = parse_utc_iso(created)
+    if created_dt is None:
         age_days = 0
+    else:
+        age_days = (_dt.datetime.utcnow() - created_dt).days
 
     # If deps not satisfied, make it unpickable (score very low)
     ok, _ = deps_satisfied(meta, id_to_meta)
@@ -592,8 +605,8 @@ def cmd_init(args: argparse.Namespace) -> int:
             "labels": ["example"],
             "tags": [],
             "owner": None,
-            "created": today_str(),
-            "updated": today_str(),
+            "created": now_utc_iso(),
+            "updated": now_utc_iso(),
             "depends_on": [],
             "branch": None,
         })
@@ -676,8 +689,8 @@ def cmd_new(args: argparse.Namespace) -> int:
         "labels": labels,
         "tags": tags,
         "owner": owner,
-        "created": today_str(),
-        "updated": today_str(),
+        "created": now_utc_iso(),
+        "updated": now_utc_iso(),
         "depends_on": depends_on,
         "branch": branch,
     })
@@ -778,7 +791,7 @@ def cmd_claim(args: argparse.Namespace) -> int:
     meta["status"] = "claimed"
     meta["owner"] = args.owner
     meta["branch"] = args.branch.strip() if args.branch else _default_branch(meta)
-    meta["updated"] = today_str()
+    meta["updated"] = now_utc_iso()
 
     t.meta = meta
     write_ticket(t)
@@ -795,7 +808,7 @@ def cmd_comment(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     t = find_ticket_by_id(repo, args.id)
     meta = normalize_meta(t.meta)
-    meta["updated"] = today_str()
+    meta["updated"] = now_utc_iso()
     t.meta = meta
     t.body = append_progress_log(t.body, args.text.strip())
     write_ticket(t)
@@ -824,7 +837,7 @@ def cmd_set_status(args: argparse.Namespace) -> int:
         meta["branch"] = None
 
     meta["status"] = new
-    meta["updated"] = today_str()
+    meta["updated"] = now_utc_iso()
     t.meta = meta
     write_ticket(t)
     print(f"{args.id}: {old} -> {new}")
@@ -841,7 +854,7 @@ def cmd_done(args: argparse.Namespace) -> int:
         return 2
 
     meta["status"] = "done"
-    meta["updated"] = today_str()
+    meta["updated"] = now_utc_iso()
     t.meta = meta
     write_ticket(t)
     print(f"done {args.id}")
@@ -1213,7 +1226,7 @@ def cmd_pick(args: argparse.Namespace) -> int:
     meta["status"] = "claimed"
     meta["owner"] = args.owner
     meta["branch"] = args.branch.strip() if args.branch else _default_branch(meta)
-    meta["updated"] = today_str()
+    meta["updated"] = now_utc_iso()
     meta["score"] = float(score)
 
     ticket.meta = meta
@@ -1335,7 +1348,7 @@ def cmd_allocate_task(args: argparse.Namespace) -> int:
     meta["allocated_at"] = now_utc_iso()
     meta["lease_expires_at"] = lease_until.replace(microsecond=0).isoformat() + "Z"
     meta["last_attempted_at"] = now_utc_iso()
-    meta["updated"] = today_str()
+    meta["updated"] = now_utc_iso()
     meta["score"] = float(score)
     meta["branch"] = args.branch.strip() if args.branch else _default_branch(meta)
 
@@ -1378,7 +1391,7 @@ def cmd_fail_task(args: argparse.Namespace) -> int:
     meta["retry_limit"] = retry_limit
     meta["last_error"] = args.error.strip()
     meta["last_attempted_at"] = now_utc_iso()
-    meta["updated"] = today_str()
+    meta["updated"] = now_utc_iso()
 
     exhausted = retry_count >= retry_limit
     if exhausted:
