@@ -17,7 +17,7 @@ Example:
 ## Unreleased
 
 - 2026-03-04 | Docs | Added `RELEASE_CHECKLIST.md` with end-to-end unified `v*` release runbook (preflight, tagging, asset verification, platform smoke checks)
-- 2026-03-04 | Added | Added unified `.github/workflows/platform-release.yml` to publish combined Rust + Zig Linux/macOS/Windows native artifacts on `v*` tags with signed `SHA256SUMS`
+- 2026-03-04 | Added | Added unified `.github/workflows/combined-release.yml` to publish combined Rust + Zig Linux/macOS/Windows native artifacts on `v*` tags with signed `SHA256SUMS`
 - 2026-03-04 | Changed | Updated Rust release packaging to emit `.zip` archives for Windows targets (with `.tar.gz` retained for Linux/macOS)
 - 2026-03-04 | Docs | Added cross-target parity test matrix snapshot and regeneration commands to `skills.md` for future agent handoffs
 - 2026-03-04 | Added | Added global version conventions across `mt.py`, `rust-mt`, and `zig-mt`: no-command invocation plus `-v`/`--version` now print version/build-info output (with structured `version --json` retained)

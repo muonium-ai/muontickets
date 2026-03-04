@@ -14,7 +14,7 @@ Release date: 2026-03-04
 
 ### Unified release workflow
 
-- Added `.github/workflows/platform-release.yml`.
+- Added `.github/workflows/combined-release.yml`.
 - Triggered by tags matching `v*`.
 - Builds native artifacts for Linux, macOS, and Windows for both Rust and Zig.
 - Publishes signed release metadata (`SHA256SUMS`, `SHA256SUMS.sig`, `SHA256SUMS.pem`).
@@ -74,6 +74,6 @@ cosign verify-blob \
   --signature SHA256SUMS.sig \
   --certificate SHA256SUMS.pem \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(platform-release|rust-release|zig-release).yml@refs/(tags/(v.*|rust-v.*|zig-v.*)|heads/main)$' \
+  --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(combined-release|rust-release|zig-release).yml@refs/(tags/(v.*|rust-v.*|zig-v.*)|heads/main)$' \
   SHA256SUMS
 ```

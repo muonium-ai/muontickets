@@ -47,7 +47,7 @@ Note: this port links against system `sqlite3` + libc, so cross-target builds re
 ## CI publishing and signing
 
 - Workflow: `.github/workflows/zig-release.yml`
-- Unified workflow: `.github/workflows/platform-release.yml`
+- Unified workflow: `.github/workflows/combined-release.yml`
 - Triggers:
 	- Tag push matching `zig-v*` (build + publish)
 	- Manual dispatch (`workflow_dispatch`) with optional `publish=true`
@@ -66,7 +66,7 @@ cosign verify-blob \
 	--signature SHA256SUMS.sig \
 	--certificate SHA256SUMS.pem \
 	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
-	--certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(zig-release|platform-release).yml@refs/(tags/(zig-v.*|v.*)|heads/main)$' \
+	--certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(zig-release|combined-release).yml@refs/(tags/(zig-v.*|v.*)|heads/main)$' \
 	SHA256SUMS
 ```
 

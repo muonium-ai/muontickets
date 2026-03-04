@@ -200,7 +200,7 @@ git tag v0.9.0
 git push origin v0.9.0
 ```
 
-This triggers `.github/workflows/platform-release.yml` and publishes release assets for both implementations:
+This triggers `.github/workflows/combined-release.yml` and publishes release assets for both implementations:
 
 - `mt-rust-<arch>-<os>.tar.gz` (Linux/macOS)
 - `mt-rust-<arch>-windows.zip` (Windows)
@@ -236,7 +236,7 @@ Release integrity verification:
 
 ```bash
 shasum -a 256 -c SHA256SUMS
-cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(platform-release|rust-release|zig-release).yml@refs/(tags/(v.*|rust-v.*|zig-v.*)|heads/main)$' SHA256SUMS
+cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(combined-release|rust-release|zig-release).yml@refs/(tags/(v.*|rust-v.*|zig-v.*)|heads/main)$' SHA256SUMS
 ```
 
 ## Changelog Process

@@ -33,7 +33,7 @@ Optional explicit targets:
 ## CI publishing and signing
 
 - Workflow: `.github/workflows/rust-release.yml`
-- Unified workflow: `.github/workflows/platform-release.yml`
+- Unified workflow: `.github/workflows/combined-release.yml`
 - Triggers:
 	- Tag push matching `rust-v*` (build + publish)
 	- Manual dispatch (`workflow_dispatch`) with optional `publish=true`
@@ -54,7 +54,7 @@ cosign verify-blob \
 	--signature SHA256SUMS.sig \
 	--certificate SHA256SUMS.pem \
 	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
-	--certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(rust-release|platform-release).yml@refs/(tags/(rust-v.*|v.*)|heads/main)$' \
+	--certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(rust-release|combined-release).yml@refs/(tags/(rust-v.*|v.*)|heads/main)$' \
 	SHA256SUMS
 ```
 

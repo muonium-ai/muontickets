@@ -6,7 +6,7 @@ This checklist is for publishing a combined multi-platform release from this rep
 
 Trigger: push a tag matching `v*` (example `v0.9.0`).
 
-Workflow: `.github/workflows/platform-release.yml`
+Workflow: `.github/workflows/combined-release.yml`
 
 Outputs (GitHub Release assets):
 
@@ -49,7 +49,7 @@ git push origin v0.9.0
 
 In GitHub Actions:
 
-- Wait for `.github/workflows/platform-release.yml` jobs:
+- Wait for `.github/workflows/combined-release.yml` jobs:
   - `build-rust` matrix (Linux/macOS/Windows)
   - `build-zig` matrix (Linux/macOS/Windows)
   - `publish`
@@ -66,7 +66,7 @@ cosign verify-blob \
   --signature SHA256SUMS.sig \
   --certificate SHA256SUMS.pem \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/platform-release.yml@refs/tags/v.*$' \
+  --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/combined-release.yml@refs/tags/v.*$' \
   SHA256SUMS
 ```
 
