@@ -208,6 +208,8 @@ This triggers `.github/workflows/platform-release.yml` and publishes release ass
 - `mt-zig-<arch>-windows.zip` (Windows)
 - `SHA256SUMS`, `SHA256SUMS.sig`, `SHA256SUMS.pem`
 
+Detailed operator runbook: see [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
+
 Package-manager path (Cargo):
 
 ```bash
@@ -220,21 +222,21 @@ Direct binary download path (GitHub Releases):
 
 ```bash
 # macOS/Linux example (replace tag and artifact name as needed)
-curl -L -o mt-rust.tar.gz https://github.com/muonium-ai/muontickets/releases/download/rust-vX.Y.Z/mt-rust-<arch>-<os>.tar.gz
+curl -L -o mt-rust.tar.gz https://github.com/muonium-ai/muontickets/releases/download/vX.Y.Z/mt-rust-<arch>-<os>.tar.gz
 tar -xzf mt-rust.tar.gz
 ```
 
 ```powershell
 # Windows PowerShell example
-Invoke-WebRequest -Uri "https://github.com/muonium-ai/muontickets/releases/download/rust-vX.Y.Z/mt-rust-<arch>-windows.tar.gz" -OutFile "mt-rust.tar.gz"
-tar -xzf mt-rust.tar.gz
+Invoke-WebRequest -Uri "https://github.com/muonium-ai/muontickets/releases/download/vX.Y.Z/mt-rust-<arch>-windows.zip" -OutFile "mt-rust.zip"
+Expand-Archive -Path "mt-rust.zip" -DestinationPath "."
 ```
 
 Release integrity verification:
 
 ```bash
 shasum -a 256 -c SHA256SUMS
-cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/rust-release.yml@refs/(tags/rust-v.*|heads/main)$' SHA256SUMS
+cosign verify-blob --signature SHA256SUMS.sig --certificate SHA256SUMS.pem --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/muonium-ai/muontickets/.github/workflows/(platform-release|rust-release|zig-release).yml@refs/(tags/(v.*|rust-v.*|zig-v.*)|heads/main)$' SHA256SUMS
 ```
 
 ## Changelog Process
