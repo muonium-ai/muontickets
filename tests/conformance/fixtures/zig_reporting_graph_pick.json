@@ -36,7 +36,7 @@
       "name": "export json",
       "args": ["export", "--format", "json"],
       "expect_exit": 0,
-      "expect_output_contains": ["\"id\":\"T-000002\"", "\"id\":\"T-000003\""]
+      "expect_output_contains": ["\"id\": \"T-000002\"", "\"id\": \"T-000003\""]
     },
     {
       "name": "build report database",

@@ -72,6 +72,18 @@ class ConformanceRunnerTests(unittest.TestCase):
             text=True,
         )
 
+    def run_fixture_with_cmd(self, fixture_name: str, mt_cmd: str) -> subprocess.CompletedProcess[str]:
+        fixture = FIXTURES / fixture_name
+        env = dict(**__import__("os").environ)
+        env["MT_CMD"] = mt_cmd
+        return subprocess.run(
+            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
+            cwd=str(ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
     def test_core_workflow_fixture(self) -> None:
         proc = self.run_fixture("core_workflow.json")
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
@@ -100,112 +112,63 @@ class ConformanceRunnerTests(unittest.TestCase):
     def test_zig_reporting_graph_pick_fixture(self) -> None:
         zig_bin = self.get_zig_bin()
 
-        fixture = FIXTURES / "zig_reporting_graph_pick.json"
-        env = dict(**__import__("os").environ)
-        env["MT_CMD"] = zig_bin
-        proc = subprocess.run(
-            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
-            cwd=str(ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        proc = self.run_fixture_with_cmd("zig_reporting_graph_pick.json", zig_bin)
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
     def test_zig_options_parity_fixture(self) -> None:
         zig_bin = self.get_zig_bin()
 
-        fixture = FIXTURES / "options_parity.json"
-        env = dict(**__import__("os").environ)
-        env["MT_CMD"] = zig_bin
-        proc = subprocess.run(
-            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
-            cwd=str(ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        proc = self.run_fixture_with_cmd("options_parity.json", zig_bin)
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
     def test_zig_pick_scoring_fixture(self) -> None:
         zig_bin = self.get_zig_bin()
 
-        fixture = FIXTURES / "pick_scoring.json"
-        env = dict(**__import__("os").environ)
-        env["MT_CMD"] = zig_bin
-        proc = subprocess.run(
-            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
-            cwd=str(ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        proc = self.run_fixture_with_cmd("pick_scoring.json", zig_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_zig_queue_allocate_fail_fixture(self) -> None:
+        zig_bin = self.get_zig_bin()
+
+        proc = self.run_fixture_with_cmd("queue_allocate_fail.json", zig_bin)
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
     def test_rust_core_workflow_fixture(self) -> None:
         rust_bin = self.get_rust_bin()
 
-        fixture = FIXTURES / "core_workflow.json"
-        env = dict(**__import__("os").environ)
-        env["MT_CMD"] = rust_bin
-        proc = subprocess.run(
-            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
-            cwd=str(ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        proc = self.run_fixture_with_cmd("core_workflow.json", rust_bin)
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
     def test_rust_reporting_graph_pick_fixture(self) -> None:
         rust_bin = self.get_rust_bin()
 
-        fixture = FIXTURES / "reporting_graph_pick.json"
-        env = dict(**__import__("os").environ)
-        env["MT_CMD"] = rust_bin
-        proc = subprocess.run(
-            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
-            cwd=str(ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        proc = self.run_fixture_with_cmd("reporting_graph_pick.json", rust_bin)
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
     def test_rust_options_parity_fixture(self) -> None:
         rust_bin = self.get_rust_bin()
 
-        fixture = FIXTURES / "options_parity.json"
-        env = dict(**__import__("os").environ)
-        env["MT_CMD"] = rust_bin
-        proc = subprocess.run(
-            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
-            cwd=str(ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        proc = self.run_fixture_with_cmd("options_parity.json", rust_bin)
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
     def test_rust_pick_scoring_fixture(self) -> None:
         rust_bin = self.get_rust_bin()
 
-        fixture = FIXTURES / "pick_scoring.json"
-        env = dict(**__import__("os").environ)
-        env["MT_CMD"] = rust_bin
-        proc = subprocess.run(
-            [str(PYTHON), str(RUNNER), "--fixture", str(fixture)],
-            cwd=str(ROOT),
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        proc = self.run_fixture_with_cmd("pick_scoring.json", rust_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_rust_queue_allocate_fail_fixture(self) -> None:
+        rust_bin = self.get_rust_bin()
+
+        proc = self.run_fixture_with_cmd("queue_allocate_fail.json", rust_bin)
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 

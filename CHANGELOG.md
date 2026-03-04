@@ -16,6 +16,7 @@ Example:
 
 ## Unreleased
 
+- 2026-03-04 | Docs | Added cross-target parity test matrix snapshot and regeneration commands to `skills.md` for future agent handoffs
 - 2026-03-04 | Added | Added global version conventions across `mt.py`, `rust-mt`, and `zig-mt`: no-command invocation plus `-v`/`--version` now print version/build-info output (with structured `version --json` retained)
 - 2026-03-04 | Added | Added `rust-mt version` and `zig-mt version` outputs sourced from root `VERSION`, including compiler/build-tool metadata (`rustc`/`cargo` and `zig`)
 - 2026-03-04 | Added | Added `mt version` command backed by root `VERSION` file with JSON/plain build-info output (`python` tool version, executable, platform)

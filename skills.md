@@ -129,6 +129,112 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000123
 uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 ```
 
+## Cross-target parity snapshot (2026-03-04)
+
+Latest Python-driven parity run against all three CLIs:
+
+| Target | Status | Fixtures Passed | Fixtures Failed | Duration (s) |
+|---|---:|---:|---:|---:|
+| mt.py | PASS | 5 | 0 | 1.71 |
+| rust-mt | PASS | 5 | 0 | 0.41 |
+| zig-mt | PASS | 6 | 0 | 0.42 |
+
+Project-level Python test discovery run:
+
+| Suite | Status | Result | Duration |
+|---|---:|---|---:|
+| unittest discover (`tests/test_*.py`) | PASS | 30 tests, 0 failures | 3.60s |
+
+How to regenerate this matrix:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+
+.venv/bin/python - <<'PY'
+import os, subprocess, time
+from pathlib import Path
+
+ROOT = Path('.').resolve()
+PYTHON = ROOT / '.venv' / 'bin' / 'python'
+RUNNER = ROOT / 'tests' / 'conformance' / 'runner.py'
+FIXTURE_DIR = ROOT / 'tests' / 'conformance' / 'fixtures'
+
+fixtures_common = [
+	'core_workflow.json',
+	'reporting_graph_pick.json',
+	'options_parity.json',
+	'pick_scoring.json',
+	'queue_allocate_fail.json',
+]
+fixtures_extra = {
+	'zig-mt': ['zig_reporting_graph_pick.json'],
+}
+
+def command_exists(name: str) -> bool:
+	return subprocess.run(['which', name], capture_output=True, text=True).returncode == 0
+
+def find_rust_bin():
+	env = os.environ.get('RUST_MT_BIN', '').strip()
+	if env:
+		return env
+	release = ROOT / 'ports' / 'rust-mt' / 'target' / 'release' / 'mt-port'
+	debug = ROOT / 'ports' / 'rust-mt' / 'target' / 'debug' / 'mt-port'
+	if release.exists():
+		return str(release)
+	if debug.exists():
+		return str(debug)
+	if command_exists('cargo'):
+		b = subprocess.run(['cargo', 'build', '--release'], cwd=str(ROOT / 'ports' / 'rust-mt'), capture_output=True, text=True)
+		if b.returncode == 0 and release.exists():
+			return str(release)
+	return None
+
+def find_zig_bin():
+	env = os.environ.get('ZIG_MT_BIN', '').strip()
+	if env:
+		return env
+	default = ROOT / 'ports' / 'zig-mt' / 'zig-out' / 'bin' / 'mt-zig'
+	if default.exists():
+		return str(default)
+	if command_exists('zig'):
+		b = subprocess.run(['zig', 'build', '-Doptimize=ReleaseSafe'], cwd=str(ROOT / 'ports' / 'zig-mt'), capture_output=True, text=True)
+		if b.returncode == 0 and default.exists():
+			return str(default)
+	return None
+
+targets = {
+	'mt.py': f"{PYTHON} {ROOT / 'mt.py'}",
+	'rust-mt': find_rust_bin(),
+	'zig-mt': find_zig_bin(),
+}
+
+print('| Target | Status | Fixtures Passed | Fixtures Failed | Duration (s) | Notes |')
+print('|---|---:|---:|---:|---:|---|')
+for name, cmd in targets.items():
+	if not cmd:
+		print(f'| {name} | SKIP | 0 | 0 | 0.00 | binary not available |')
+		continue
+	fixture_list = list(fixtures_common)
+	fixture_list.extend(fixtures_extra.get(name, []))
+	passed = failed = 0
+	start = time.time()
+	fail_names = []
+	for fixture in fixture_list:
+		env = dict(os.environ)
+		env['MT_CMD'] = cmd
+		p = subprocess.run([str(PYTHON), str(RUNNER), '--fixture', str(FIXTURE_DIR / fixture)], cwd=str(ROOT), env=env, capture_output=True, text=True)
+		if p.returncode == 0:
+			passed += 1
+		else:
+			failed += 1
+			fail_names.append(fixture)
+	dur = time.time() - start
+	note = '' if not fail_names else ('failed: ' + ', '.join(fail_names))
+	status = 'PASS' if failed == 0 else 'FAIL'
+	print(f'| {name} | {status} | {passed} | {failed} | {dur:.2f} | {note} |')
+PY
+```
+
 ### Archive completed ticket
 
 ```bash
