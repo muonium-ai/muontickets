@@ -982,7 +982,7 @@ fn appendIncident(allocator: std.mem.Allocator, repo: []const u8, message: []con
     const incidents_path = try std.fs.path.join(allocator, &[_][]const u8{ tickets_dir, "incidents.log" });
     defer allocator.free(incidents_path);
 
-    var out = std.ArrayList(u8).empty;
+    var out = std.ArrayList(u8).init(allocator);
     defer out.deinit();
     if (fileExists(incidents_path)) {
         const existing = try std.fs.cwd().readFileAlloc(allocator, incidents_path, 1024 * 1024);
@@ -992,7 +992,7 @@ fn appendIncident(allocator: std.mem.Allocator, repo: []const u8, message: []con
 
     const now_iso = try nowUtcIsoTimestamp(allocator);
     defer allocator.free(now_iso);
-    try out.writer(allocator).print("{s} {s}\n", .{ now_iso, message });
+    try out.writer().print("{s} {s}\n", .{ now_iso, message });
     try std.fs.cwd().writeFile(incidents_path, out.items);
 }
 
