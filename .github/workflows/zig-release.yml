@@ -30,7 +30,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.15.2
+          version: 0.14.1
 
       - name: Build native release artifacts
         working-directory: ports/zig-mt

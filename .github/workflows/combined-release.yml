@@ -48,7 +48,8 @@ jobs:
             echo "built rust binary not found in dist" >&2
             exit 1
           fi
-          MT_CMD="$BIN" python3 tests/conformance/runner.py --fixture tests/conformance/fixtures/reporting_graph_pick.json
+          BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
+          MT_CMD="$BIN" python tests/conformance/runner.py --fixture tests/conformance/fixtures/reporting_graph_pick.json
 
       - name: Upload Rust release artifacts
         uses: actions/upload-artifact@v4
@@ -70,7 +71,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v1
         with:
-          version: 0.15.2
+          version: 0.14.1
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -90,7 +91,8 @@ jobs:
             echo "built zig binary not found in dist" >&2
             exit 1
           fi
-          MT_CMD="$BIN" python3 tests/conformance/runner.py --fixture tests/conformance/fixtures/reporting_graph_pick.json
+          BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
+          MT_CMD="$BIN" python tests/conformance/runner.py --fixture tests/conformance/fixtures/reporting_graph_pick.json
 
       - name: Upload Zig release artifacts
         uses: actions/upload-artifact@v4

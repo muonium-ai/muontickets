@@ -50,6 +50,7 @@ jobs:
             echo "built binary not found in dist" >&2
             exit 1
           fi
+          BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
           MT_CMD="$BIN" python tests/conformance/runner.py --fixture tests/conformance/fixtures/reporting_graph_pick.json
 
       - name: Upload release artifacts

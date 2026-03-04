@@ -42,6 +42,49 @@ done
 mkdir -p "$DIST_DIR"
 rm -rf "$DIST_DIR"/mt-rust-* "$DIST_DIR"/mt-rust-*.tar.gz "$DIST_DIR"/mt-rust-*.zip "$DIST_DIR"/SHA256SUMS
 
+create_zip() {
+  local src_dir="$1"
+  local out_zip="$2"
+
+  if command -v zip >/dev/null 2>&1; then
+    zip -q -r "$out_zip" "$src_dir"
+    return 0
+  fi
+
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -Command "Compress-Archive -Path '$src_dir' -DestinationPath '$out_zip' -Force" >/dev/null
+    return 0
+  fi
+
+  local py_cmd=""
+  if command -v python3 >/dev/null 2>&1; then
+    py_cmd="python3"
+  elif command -v python >/dev/null 2>&1; then
+    py_cmd="python"
+  fi
+
+  if [[ -n "$py_cmd" ]]; then
+    "$py_cmd" - <<PY
+import os
+import zipfile
+
+src_dir = ${src_dir@Q}
+out_zip = ${out_zip@Q}
+
+with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+    for root, _, files in os.walk(src_dir):
+        for name in files:
+            abs_path = os.path.join(root, name)
+            arc_name = os.path.relpath(abs_path, start=os.path.dirname(src_dir))
+            zf.write(abs_path, arcname=arc_name)
+PY
+    return 0
+  fi
+
+  echo "no zip-capable tool found (zip, powershell.exe, python3/python)" >&2
+  return 1
+}
+
 native_label() {
   local os arch
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -115,7 +158,7 @@ for target in "${TARGETS[@]}"; do
     (
       cd "$DIST_DIR"
       rm -f "$pkg_name.zip"
-      zip -q -r "$pkg_name.zip" "$pkg_name"
+      create_zip "$pkg_name" "$pkg_name.zip"
     )
   else
     (
