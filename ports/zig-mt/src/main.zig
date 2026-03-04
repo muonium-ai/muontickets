@@ -138,7 +138,7 @@ fn dirExists(path: []const u8) bool {
 fn printStdout(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
     const message = try std.fmt.allocPrint(allocator, fmt, args);
     defer allocator.free(message);
-    try std.fs.File.stdout().writeAll(message);
+    try std.io.getStdOut().writeAll(message);
 }
 
 fn isTicketId(id: []const u8) bool {
