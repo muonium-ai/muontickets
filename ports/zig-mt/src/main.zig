@@ -681,7 +681,7 @@ fn bodyExcerptFirstLines(allocator: std.mem.Allocator, body: []const u8, max_lin
         try out.appendSlice(std.mem.trimRight(u8, line, " \t\r"));
         count += 1;
     }
-    return out.toOwnedSlice(allocator);
+    return out.toOwnedSlice();
 }
 
 fn listJsonFromRaw(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
@@ -696,7 +696,7 @@ fn listJsonFromRaw(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
         try appendJsonString(allocator, &out, v);
     }
     try out.append(']');
-    return out.toOwnedSlice(allocator);
+    return out.toOwnedSlice();
 }
 
 fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
@@ -799,7 +799,7 @@ fn setMetaField(allocator: std.mem.Allocator, content: []const u8, key: []const 
     if (!replaced) {
         return error.FieldNotReplaced;
     }
-    return out.toOwnedSlice(allocator);
+    return out.toOwnedSlice();
 }
 
 fn ticketPath(allocator: std.mem.Allocator, repo: []const u8, id: []const u8) ![]u8 {
@@ -1046,7 +1046,7 @@ fn listLiteral(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
         }
     }
     try out.append(']');
-    return out.toOwnedSlice(allocator);
+    return out.toOwnedSlice();
 }
 
 fn transitionAllowed(old: []const u8, new: []const u8) bool {
