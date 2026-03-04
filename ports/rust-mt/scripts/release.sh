@@ -85,6 +85,28 @@ PY
   return 1
 }
 
+append_sha256sum() {
+  local artifact="$1"
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$artifact" >> SHA256SUMS
+    return 0
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$artifact" >> SHA256SUMS
+    return 0
+  fi
+
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -Command "$h=(Get-FileHash -Algorithm SHA256 -Path '${artifact}').Hash.ToLower(); Write-Output \"$h  ${artifact}\"" >> SHA256SUMS
+    return 0
+  fi
+
+  echo "no SHA256 tool found (shasum, sha256sum, powershell.exe)" >&2
+  return 1
+}
+
 native_label() {
   local os arch
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -174,7 +196,7 @@ done
   rm -f SHA256SUMS
   for artifact in *.tar.gz *.zip; do
     [[ -e "$artifact" ]] || continue
-    shasum -a 256 "$artifact" >> SHA256SUMS
+    append_sha256sum "$artifact"
   done
 )
 
