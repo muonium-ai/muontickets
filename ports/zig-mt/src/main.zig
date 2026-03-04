@@ -70,8 +70,7 @@ fn printHelp() void {
         \\  validate
         \\  report
         \\ 
-        \\Implemented: init, new, ls, show, claim, set-status, done, archive, validate
-        \\Note: remaining command handlers are scaffolded and will be implemented incrementally.
+        \\Implemented: all listed commands
         \\ 
     , .{});
 }
