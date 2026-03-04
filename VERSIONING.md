@@ -33,6 +33,16 @@ Required tool metadata by implementation:
 - Rust binary: `rustc` and `cargo` versions used to build
 - Zig binary: `zig` compiler version used to build
 
+## Global invocation conventions
+
+All CLIs should support conventional global version behaviors:
+
+- No subcommand (`mt.py`, `rust-mt`, `zig-mt`) prints plain-text version/build-info and exits `0`.
+- `-v` prints plain-text version/build-info and exits `0`.
+- `--version` prints plain-text version/build-info and exits `0`.
+
+Structured output remains available through the explicit `version --json` command.
+
 ## Rationale
 
 A shared, parseable version/build-info contract makes field bug reports reproducible and comparable across implementations.

@@ -12,6 +12,22 @@ ports/zig-mt/zig-out/bin/mt-zig version --json
 
 All three commands source semantic version from root `VERSION` and include implementation-specific build tool versions.
 
+Global conventions (plain text):
+
+```bash
+.venv/bin/python mt.py
+.venv/bin/python mt.py -v
+.venv/bin/python mt.py --version
+
+ports/rust-mt/target/release/mt-port
+ports/rust-mt/target/release/mt-port -v
+ports/rust-mt/target/release/mt-port --version
+
+ports/zig-mt/zig-out/bin/mt-zig
+ports/zig-mt/zig-out/bin/mt-zig -v
+ports/zig-mt/zig-out/bin/mt-zig --version
+```
+
 ## Benchmarks
 
 ### allocate-task single run

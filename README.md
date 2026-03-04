@@ -71,6 +71,22 @@ ports/rust-mt/target/release/mt-port version --json
 ports/zig-mt/zig-out/bin/mt-zig version --json
 ```
 
+Conventional global shortcuts are also supported:
+
+```bash
+uv run python3 mt.py
+uv run python3 mt.py -v
+uv run python3 mt.py --version
+
+ports/rust-mt/target/release/mt-port
+ports/rust-mt/target/release/mt-port -v
+ports/rust-mt/target/release/mt-port --version
+
+ports/zig-mt/zig-out/bin/mt-zig
+ports/zig-mt/zig-out/bin/mt-zig -v
+ports/zig-mt/zig-out/bin/mt-zig --version
+```
+
 Each command emits parseable build info (implementation + semantic version + toolchain versions) to make reports reproducible.
 
 ## For Agents: Ticket Workflow

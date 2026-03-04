@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use regex::Regex;
 use rusqlite::{params, Connection};
 use serde_json::json;
@@ -14,9 +14,12 @@ use serde_yaml::{Mapping, Value};
 #[derive(Parser, Debug)]
 #[command(name = "mt")]
 #[command(about = "MuonTickets CLI port (Rust scaffold)")]
+#[command(disable_version_flag = true)]
 struct Cli {
+    #[arg(short = 'v', long = "version", action = ArgAction::SetTrue, global = true)]
+    version: bool,
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -2112,7 +2115,11 @@ fn cmd_version(as_json: bool) -> Result<i32> {
 
 fn run() -> Result<i32> {
     let cli = Cli::parse();
-    match cli.command {
+    if cli.version || cli.command.is_none() {
+        return cmd_version(false);
+    }
+
+    match cli.command.expect("checked for Some above") {
         Commands::Init => cmd_init(),
         Commands::New {
             title,

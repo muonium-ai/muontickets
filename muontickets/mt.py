@@ -1719,8 +1719,14 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 def main(argv: Optional[List[str]] = None) -> int:
+    args_list = list(argv) if argv is not None else sys.argv[1:]
+    if len(args_list) == 0:
+        return cmd_version(argparse.Namespace(json=False))
+    if args_list[0] in ("-v", "--version"):
+        return cmd_version(argparse.Namespace(json=False))
+
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(args_list)
     return int(args.func(args))
 
 if __name__ == "__main__":

@@ -14,6 +14,11 @@ PYTHON = ROOT / ".venv" / "bin" / "python"
 
 
 class VersioningTests(unittest.TestCase):
+    def _assert_plain_version_output(self, output: str, implementation_label: str) -> None:
+        text = output.strip()
+        self.assertIn(implementation_label, text)
+        self.assertIn("0.9", text)
+
     def _get_rust_bin(self) -> str:
         rust_bin = os.environ.get("RUST_MT_BIN", "").strip()
         if rust_bin:
@@ -81,6 +86,12 @@ class VersioningTests(unittest.TestCase):
         self.assertIn("build_tools", payload)
         self.assertIn("python", payload["build_tools"])
 
+    def test_mt_global_version_invocations(self) -> None:
+        for args in [[], ["-v"], ["--version"]]:
+            proc = subprocess.run([str(PYTHON), str(CLI), *args], cwd=str(ROOT), capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, msg=f"args={args} stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+            self._assert_plain_version_output(proc.stdout + proc.stderr, "mt.py")
+
     def test_rust_version_json_output(self) -> None:
         rust_bin = self._get_rust_bin()
         proc = subprocess.run([rust_bin, "version", "--json"], cwd=str(ROOT), capture_output=True, text=True)
@@ -94,6 +105,13 @@ class VersioningTests(unittest.TestCase):
         self.assertIn("rustc", payload["build_tools"])
         self.assertIn("cargo", payload["build_tools"])
 
+    def test_rust_global_version_invocations(self) -> None:
+        rust_bin = self._get_rust_bin()
+        for args in [[], ["-v"], ["--version"]]:
+            proc = subprocess.run([rust_bin, *args], cwd=str(ROOT), capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, msg=f"args={args} stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+            self._assert_plain_version_output(proc.stdout + proc.stderr, "rust-mt")
+
     def test_zig_version_json_output(self) -> None:
         zig_bin = self._get_zig_bin()
         proc = subprocess.run([zig_bin, "version", "--json"], cwd=str(ROOT), capture_output=True, text=True)
@@ -105,6 +123,13 @@ class VersioningTests(unittest.TestCase):
         self.assertIn("version_minor", payload)
         self.assertIn("build_tools", payload)
         self.assertIn("zig", payload["build_tools"])
+
+    def test_zig_global_version_invocations(self) -> None:
+        zig_bin = self._get_zig_bin()
+        for args in [[], ["-v"], ["--version"]]:
+            proc = subprocess.run([zig_bin, *args], cwd=str(ROOT), capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, msg=f"args={args} stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+            self._assert_plain_version_output(proc.stdout + proc.stderr, "zig-mt")
 
 
 if __name__ == "__main__":

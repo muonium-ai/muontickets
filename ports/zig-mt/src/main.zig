@@ -2857,11 +2857,15 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 2) {
-        printHelp();
+        try cmdVersion(allocator, &[_][:0]u8{});
         return;
     }
 
     const arg = args[1];
+    if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v")) {
+        try cmdVersion(allocator, args[2..]);
+        return;
+    }
     if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
         printHelp();
         return;
