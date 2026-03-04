@@ -13,6 +13,16 @@ Submodule install command:
 curl -fsSL https://raw.githubusercontent.com/muonium-ai/muontickets/main/install.sh | bash
 ```
 
+New project explicit submodule setup:
+
+```bash
+git init
+git submodule add https://github.com/muonium-ai/muontickets.git tickets/mt/muontickets
+git submodule update --init --recursive
+uv sync
+uv run python3 tickets/mt/muontickets/muontickets/mt.py init
+```
+
 ### Ticket states
 
 - `ready` → not started
@@ -54,6 +64,24 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 
 # After merge, mark complete
 uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
+```
+
+### Create tickets for agents with template defaults
+
+```bash
+# optional: copy default template into your board
+cp tickets/mt/muontickets/muontickets/ticket.template tickets/ticket.template
+
+# create queue of work items
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Implement billing API" --label backend --tag sprint-3
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Add billing API tests" --type tests --depends-on T-000001 --label qa
+
+# assign work to agents
+uv run python3 tickets/mt/muontickets/muontickets/mt.py claim T-000001 --owner agent-a
+uv run python3 tickets/mt/muontickets/muontickets/mt.py claim T-000002 --owner agent-b
+
+# final consistency check
+uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 ```
 
 Direct-checkout equivalent (MuonTickets core repo only):

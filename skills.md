@@ -28,6 +28,16 @@ uv run python3 muontickets/mt.py <command>
 uv run python3 tickets/mt/muontickets/muontickets/mt.py <command>
 ```
 
+New project bootstrap (explicit git submodule flow):
+
+```bash
+git init
+git submodule add https://github.com/muonium-ai/muontickets.git tickets/mt/muontickets
+git submodule update --init --recursive
+uv sync
+uv run python3 tickets/mt/muontickets/muontickets/mt.py init
+```
+
 ### 2) Direct checkout (MuonTickets core development)
 
 Use this only when you are working in the MuonTickets repository itself:
@@ -56,6 +66,24 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Implement feature X
 
 # Direct checkout
 uv run python3 mt.py new "Implement feature X"
+```
+
+### Create agent tickets from template defaults
+
+```bash
+# optional: use MuonTickets default ticket template as your starting point
+cp tickets/mt/muontickets/muontickets/ticket.template tickets/ticket.template
+
+# create tickets; metadata defaults come from tickets/ticket.template
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Build customer import job" --label backend --tag sprint-2
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Write import integration tests" --type tests --depends-on T-000001
+
+# assign to agents
+uv run python3 tickets/mt/muontickets/muontickets/mt.py claim T-000001 --owner agent-a
+uv run python3 tickets/mt/muontickets/muontickets/mt.py claim T-000002 --owner agent-b
+
+# board integrity check before execution
+uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 ```
 
 ### Pick / claim work

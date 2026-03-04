@@ -29,6 +29,15 @@ Write a single-sentence goal.
 
 ## Notes
 
+## Agent Assignment
+- Suggested owner: agent-name
+- Suggested branch: feature/short-name
+
+## Implementation Plan
+- [ ] Describe 2-4 concrete execution steps
+- [ ] List test/validation commands to run
+- [ ] Note any dependency handoff requirements
+
 ## Queue Lifecycle (if allocated)
 - [ ] Add progress with `mt comment <id> "..."`
 - [ ] If blocked/failing, run `mt fail-task <id> --error "..."`

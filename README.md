@@ -23,6 +23,25 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/install.sh | bash
 
 Use direct checkout (this repository itself) only when developing MuonTickets core.
 
+### Install MuonTickets as a git submodule in a new project
+
+From your new project's root:
+
+```bash
+git init
+git submodule add https://github.com/muonium-ai/muontickets.git tickets/mt/muontickets
+git submodule update --init --recursive
+uv sync
+uv run python3 tickets/mt/muontickets/muontickets/mt.py init
+```
+
+Commit submodule onboarding files:
+
+```bash
+git add .gitmodules tickets/mt/muontickets tickets/
+git commit -m "Add MuonTickets submodule and initialize board"
+```
+
 ## Quickstart (uv)
 
 For repos where MuonTickets is installed as submodule:
@@ -172,6 +191,33 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Hotfix auth" --prio
 
 # Archive a completed ticket
 uv run python3 tickets/mt/muontickets/muontickets/mt.py archive T-000001
+```
+
+### Agent setup using ticket templates
+
+Use the shipped snippets to standardize agent onboarding in your project:
+
+```bash
+# optional: start from MuonTickets defaults
+cp tickets/mt/muontickets/muontickets/ticket.template tickets/ticket.template
+
+# optional: copy agent playbook snippet into your team docs
+cp tickets/mt/muontickets/muontickets/agents.snippet docs/AGENTS.md
+```
+
+Create tickets from template defaults, then assign to agents:
+
+```bash
+# create tickets with template defaults
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Implement auth middleware" --label backend --tag sprint-1
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Add API contract tests" --type tests --label qa --depends-on T-000001
+
+# claim tickets for specific agents
+uv run python3 tickets/mt/muontickets/muontickets/mt.py claim T-000001 --owner agent-a
+uv run python3 tickets/mt/muontickets/muontickets/mt.py claim T-000002 --owner agent-b
+
+# validate board before agents start work
+uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 ```
 
 ## Reporting (SQLite)
