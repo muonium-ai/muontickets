@@ -234,7 +234,7 @@ static int cmd_version_native(int as_json, int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    if (!resolve_repo_root(repo_root, sizeof(repo_root), argc, argv)) {
+    if (!find_repo_root(repo_root, sizeof(repo_root))) {
         if (getcwd(repo_root, sizeof(repo_root)) == NULL) {
             fprintf(stderr, "could not determine working directory\n");
             return 2;
@@ -267,11 +267,13 @@ static int cmd_version_native(int as_json, int argc, char **argv) {
 }
 
 static int should_handle_native_version(int argc, char **argv, int *as_json) {
+    char repo_root[PATH_MAX];
+
     if (as_json != NULL) {
         *as_json = 0;
     }
     if (argc <= 1) {
-        return 1;
+        return find_repo_root(repo_root, sizeof(repo_root));
     }
     if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
         return argc == 2;
@@ -599,10 +601,7 @@ static int split_ticket_sections(const char *text, char **fm, char **body) {
         return 1;
     }
     body_start = fm_end + 4;
-    if (*body_start == '\r') {
-        body_start++;
-    }
-    if (*body_start == '\n') {
+    while (*body_start == '\r' || *body_start == '\n') {
         body_start++;
     }
 
@@ -1219,10 +1218,7 @@ static int parse_template_file(const char *template_path, struct TemplateDefault
     }
     *fm_end = '\0';
     body_start = fm_end + 4;
-    if (*body_start == '\r') {
-        body_start++;
-    }
-    if (*body_start == '\n') {
+    while (*body_start == '\r' || *body_start == '\n') {
         body_start++;
     }
 

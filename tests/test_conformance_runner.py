@@ -342,6 +342,60 @@ class ConformanceRunnerTests(unittest.TestCase):
             self.assertIn("id: T-000002", text)
             self.assertIn("title: Native Show Ticket", text)
 
+    def test_c_show_output_matches_python_exact(self) -> None:
+        c_bin = self.get_c_bin()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+
+            subprocess.run([c_bin, "init"], cwd=str(root), check=True, capture_output=True, text=True)
+            subprocess.run([c_bin, "new", "Parity Show"], cwd=str(root), check=True, capture_output=True, text=True)
+
+            py_show = subprocess.run(
+                [str(PYTHON), str(MT_CLI), "show", "T-000002"],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            c_show = subprocess.run(
+                [c_bin, "show", "T-000002"],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(c_show.stdout.rstrip("\n"), py_show.stdout.rstrip("\n"))
+            self.assertEqual(c_show.stderr, py_show.stderr)
+
+    def test_c_no_args_outside_repo_matches_python(self) -> None:
+        c_bin = self.get_c_bin()
+        env = dict(os.environ)
+        env["MT_PYTHON"] = str(PYTHON)
+
+        with tempfile.TemporaryDirectory() as td:
+            temp_root = Path(td)
+
+            py_proc = subprocess.run(
+                [str(PYTHON), str(MT_CLI)],
+                cwd=str(temp_root),
+                capture_output=True,
+                text=True,
+            )
+            c_proc = subprocess.run(
+                [c_bin],
+                cwd=str(temp_root),
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(c_proc.returncode, py_proc.returncode)
+            self.assertEqual(c_proc.stderr, py_proc.stderr)
+            self.assertEqual(c_proc.stdout, py_proc.stdout)
+
     def test_c_native_perf_commands_without_python_entrypoint(self) -> None:
         c_bin = self.get_c_bin()
 
