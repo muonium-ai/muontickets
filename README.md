@@ -73,6 +73,28 @@ uv run python3 mt.py --help
 uv run python3 mt.py report --summary
 ```
 
+### Copy-paste: submodule + agent template workflow
+
+Use this path when onboarding a fresh project and creating agent-ready tickets from template defaults:
+
+```bash
+# 1) Install as submodule
+git submodule add https://github.com/muonium-ai/muontickets.git tickets/mt/muontickets
+git submodule update --init --recursive
+
+# 2) Initialize board and template
+uv sync
+uv run python3 tickets/mt/muontickets/muontickets/mt.py init
+
+# 3) Optional: seed team playbook from shipped snippets
+cp tickets/mt/muontickets/muontickets/ticket.template tickets/ticket.template
+cp tickets/mt/muontickets/muontickets/agents.snippet docs/AGENTS.md
+
+# 4) Create and assign agent tickets from template defaults
+uv run python3 tickets/mt/muontickets/muontickets/mt.py new "Implement feature X" --label backend
+uv run python3 tickets/mt/muontickets/muontickets/mt.py claim T-000001 --owner agent-a
+```
+
 ## Version and Build Info (Bug Reports)
 
 MuonTickets now uses the project-root `VERSION` file (`major.minor`) as the source of CLI version output.

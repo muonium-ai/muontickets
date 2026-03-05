@@ -1,3 +1,10 @@
-install muontickets as git submodule, read the instructions in the repo for location and other instructions
+Install MuonTickets as a git submodule under `tickets/mt/muontickets`.
 
+Quick setup commands (run from your project root):
+git submodule add https://github.com/muonium-ai/muontickets.git tickets/mt/muontickets
+git submodule update --init --recursive
+uv sync
+uv run python3 tickets/mt/muontickets/muontickets/mt.py init
+
+See full onboarding + ticket-template workflow in README.md.
 https://github.com/muonium-ai/muontickets
