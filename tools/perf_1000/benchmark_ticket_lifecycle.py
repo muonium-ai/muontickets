@@ -9,7 +9,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 PY = ROOT / ".venv" / "bin" / "python"
@@ -17,6 +17,7 @@ PY_MT = ROOT / "mt.py"
 PORTS_MAKE = ROOT / "ports" / "Makefile"
 RUST_BIN = ROOT / "ports" / "dist" / "rust-mt"
 ZIG_BIN = ROOT / "ports" / "dist" / "zig-mt"
+C_BIN = ROOT / "ports" / "dist" / "c-mt"
 
 
 @dataclass
@@ -47,10 +48,32 @@ def run(cmd: List[str], cwd: Path, check: bool = True) -> subprocess.CompletedPr
     return proc
 
 
-def ensure_release_bins() -> None:
-    if RUST_BIN.exists() and ZIG_BIN.exists():
-        return
-    run(["make", "-C", "ports", "release"], cwd=ROOT)
+def ensure_binary(label: str, path: Path, make_target: str, warnings: List[str]) -> bool:
+    if path.exists():
+        return True
+    try:
+        run(["make", "-C", "ports", make_target], cwd=ROOT)
+    except Exception as ex:
+        warnings.append(f"{label}: build failed ({ex})")
+        return False
+    if not path.exists():
+        warnings.append(f"{label}: expected binary missing after build at {path}")
+        return False
+    return True
+
+
+def resolve_impls() -> Tuple[List[Tuple[str, List[str]]], List[str]]:
+    warnings: List[str] = []
+    impls: List[Tuple[str, List[str]]] = [("python-mt", [str(PY), str(PY_MT)])]
+
+    if ensure_binary("rust-mt", RUST_BIN, "rust", warnings):
+        impls.append(("rust-mt", [str(RUST_BIN)]))
+    if ensure_binary("zig-mt", ZIG_BIN, "zig", warnings):
+        impls.append(("zig-mt", [str(ZIG_BIN)]))
+    if ensure_binary("c-mt", C_BIN, "c", warnings):
+        impls.append(("c-mt", [str(C_BIN)]))
+
+    return impls, warnings
 
 
 def measure(fn) -> float:
@@ -142,18 +165,20 @@ def render_markdown(results: List[ImplResult], count: int) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Benchmark 1000-ticket lifecycle across Python/Rust/Zig MuonTickets CLIs")
+    parser = argparse.ArgumentParser(description="Benchmark 1000-ticket lifecycle across Python/Rust/Zig/C MuonTickets CLIs")
     parser.add_argument("--count", type=int, default=1000, help="Number of tickets to create/update/archive")
     parser.add_argument("--report-db", default="tickets/tickets_report.sqlite3", help="Report DB path relative to temp board")
     args = parser.parse_args()
 
-    ensure_release_bins()
+    impls, warnings = resolve_impls()
+    if len(impls) == 0:
+        raise RuntimeError("No benchmark implementations available.")
 
-    impls = [
-        ("python-mt", [str(PY), str(PY_MT)]),
-        ("rust-mt", [str(RUST_BIN)]),
-        ("zig-mt", [str(ZIG_BIN)]),
-    ]
+    if warnings:
+        print("Warnings:")
+        for w in warnings:
+            print(f"- {w}")
+        print()
 
     results: List[ImplResult] = []
     for name, prefix in impls:
