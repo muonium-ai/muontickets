@@ -85,9 +85,10 @@ class VersioningTests(unittest.TestCase):
     def test_parse_major_minor_version_accepts_valid(self) -> None:
         self.assertEqual(parse_major_minor_version("0.1"), (0, 1))
         self.assertEqual(parse_major_minor_version("12.34\n"), (12, 34))
+        self.assertEqual(parse_major_minor_version("1.2.3"), (1, 2))
 
     def test_parse_major_minor_version_rejects_invalid(self) -> None:
-        invalid = ["", "1", "1.2.3", "v1.2", "1.-2", "x.y"]
+        invalid = ["", "1", "1.2.3.4", "v1.2", "1.-2", "x.y"]
         for value in invalid:
             with self.assertRaises(ValueError):
                 parse_major_minor_version(value)

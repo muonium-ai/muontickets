@@ -55,7 +55,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 ID_RE = re.compile(r"^T-\d{6}$")
 TICKET_FILE_RE = re.compile(r"^(T-\d{6})\.md$")
-VERSION_RE = re.compile(r"^(\d+)\.(\d+)$")
+VERSION_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?$")
 FRONTMATTER_BOUNDARY = "---"
 
 DEFAULT_STATES = ["ready", "claimed", "blocked", "needs_review", "done"]
@@ -206,7 +206,7 @@ def parse_major_minor_version(raw: str) -> Tuple[int, int]:
     text = (raw or "").strip()
     match = VERSION_RE.fullmatch(text)
     if not match:
-        raise ValueError("VERSION must match '<major>.<minor>' (example: 0.1)")
+        raise ValueError("VERSION must match '<major>.<minor>[.<patch>]' (example: 0.1 or 0.1.1)")
     major = int(match.group(1))
     minor = int(match.group(2))
     return major, minor
@@ -218,6 +218,17 @@ def load_repo_version(repo_root: str) -> Tuple[int, int]:
     with open(path, "r", encoding="utf-8") as f:
         raw = f.read()
     return parse_major_minor_version(raw)
+
+def load_repo_version_text(repo_root: str) -> str:
+    path = version_file_path(repo_root)
+    if not os.path.isfile(path):
+        raise ValueError(f"Missing VERSION file at project root: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        raw = f.read()
+    text = (raw or "").strip()
+    # Validate format via shared parser, but preserve optional patch text.
+    parse_major_minor_version(text)
+    return text
 
 @dataclass
 class Ticket:
@@ -1580,7 +1591,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 def cmd_version(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     major, minor = load_repo_version(repo)
-    version_text = f"{major}.{minor}"
+    version_text = load_repo_version_text(repo)
     payload = {
         "implementation": "mt.py",
         "version": version_text,

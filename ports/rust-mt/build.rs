@@ -21,19 +21,27 @@ fn main() {
 
     let is_valid = {
         let mut parts = version_trimmed.split('.');
-        match (parts.next(), parts.next(), parts.next()) {
-            (Some(major), Some(minor), None) => {
+        match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some(major), Some(minor), None, None) => {
                 !major.is_empty()
                     && !minor.is_empty()
                     && major.chars().all(|c| c.is_ascii_digit())
                     && minor.chars().all(|c| c.is_ascii_digit())
+            }
+            (Some(major), Some(minor), Some(patch), None) => {
+                !major.is_empty()
+                    && !minor.is_empty()
+                    && !patch.is_empty()
+                    && major.chars().all(|c| c.is_ascii_digit())
+                    && minor.chars().all(|c| c.is_ascii_digit())
+                    && patch.chars().all(|c| c.is_ascii_digit())
             }
             _ => false,
         }
     };
 
     if !is_valid {
-        panic!("invalid VERSION format '{}'; expected '<major>.<minor>'", version_trimmed);
+        panic!("invalid VERSION format '{}'; expected '<major>.<minor>[.<patch>]'", version_trimmed);
     }
 
     println!("cargo:rustc-env=MT_ROOT_VERSION={}", version_trimmed);

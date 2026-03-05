@@ -935,11 +935,16 @@ fn parseMajorMinorVersion(allocator: std.mem.Allocator, raw: []const u8) !struct
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
     const dot_idx = std.mem.indexOfScalar(u8, trimmed, '.') orelse return error.InvalidVersionFormat;
     if (dot_idx == 0 or dot_idx + 1 >= trimmed.len) return error.InvalidVersionFormat;
-    if (std.mem.indexOfScalarPos(u8, trimmed, dot_idx + 1, '.') != null) return error.InvalidVersionFormat;
+    const second_dot_idx_opt = std.mem.indexOfScalarPos(u8, trimmed, dot_idx + 1, '.');
     const major_raw = trimmed[0..dot_idx];
-    const minor_raw = trimmed[dot_idx + 1 ..];
+    const minor_raw = if (second_dot_idx_opt) |second_dot_idx| trimmed[dot_idx + 1 .. second_dot_idx] else trimmed[dot_idx + 1 ..];
     const major = std.fmt.parseInt(u64, major_raw, 10) catch return error.InvalidVersionFormat;
     const minor = std.fmt.parseInt(u64, minor_raw, 10) catch return error.InvalidVersionFormat;
+    if (second_dot_idx_opt) |second_dot_idx| {
+        if (second_dot_idx + 1 >= trimmed.len) return error.InvalidVersionFormat;
+        const patch_raw = trimmed[second_dot_idx + 1 ..];
+        _ = std.fmt.parseInt(u64, patch_raw, 10) catch return error.InvalidVersionFormat;
+    }
     return .{
         .major = major,
         .minor = minor,
@@ -2715,7 +2720,7 @@ fn cmdVersion(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(version_raw);
 
     const parsed = parseMajorMinorVersion(allocator, version_raw) catch {
-        std.debug.print("invalid VERSION format at project root (expected <major>.<minor>)\n", .{});
+        std.debug.print("invalid VERSION format at project root (expected <major>.<minor>[.<patch>])\n", .{});
         std.process.exit(2);
     };
     defer allocator.free(parsed.text);

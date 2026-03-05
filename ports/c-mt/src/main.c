@@ -176,7 +176,7 @@ static int read_version_file(const char *repo_root, int *major, int *minor, char
     char version_path[PATH_MAX];
     char buf[128];
     FILE *f;
-    int maj, min;
+    int maj, min, patch;
     char extra;
 
     join_path(version_path, sizeof(version_path), repo_root, "VERSION");
@@ -187,13 +187,21 @@ static int read_version_file(const char *repo_root, int *major, int *minor, char
     }
     if (fgets(buf, sizeof(buf), f) == NULL) {
         fclose(f);
-        fprintf(stderr, "VERSION must match '<major>.<minor>' (example: 0.1)\n");
+        fprintf(stderr, "VERSION must match '<major>.<minor>[.<patch>]' (example: 0.1 or 0.1.1)\n");
         return 2;
     }
     fclose(f);
 
-    if (sscanf(buf, "%d.%d %c", &maj, &min, &extra) != 2) {
-        fprintf(stderr, "VERSION must match '<major>.<minor>' (example: 0.1)\n");
+    if (sscanf(buf, "%d.%d.%d %c", &maj, &min, &patch, &extra) == 3) {
+        if (version_text != NULL && version_text_size > 0) {
+            snprintf(version_text, version_text_size, "%d.%d.%d", maj, min, patch);
+        }
+    } else if (sscanf(buf, "%d.%d %c", &maj, &min, &extra) == 2) {
+        if (version_text != NULL && version_text_size > 0) {
+            snprintf(version_text, version_text_size, "%d.%d", maj, min);
+        }
+    } else {
+        fprintf(stderr, "VERSION must match '<major>.<minor>[.<patch>]' (example: 0.1 or 0.1.1)\n");
         return 2;
     }
 
@@ -202,9 +210,6 @@ static int read_version_file(const char *repo_root, int *major, int *minor, char
     }
     if (minor != NULL) {
         *minor = min;
-    }
-    if (version_text != NULL && version_text_size > 0) {
-        snprintf(version_text, version_text_size, "%d.%d", maj, min);
     }
     return 0;
 }

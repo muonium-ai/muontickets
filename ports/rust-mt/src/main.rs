@@ -184,16 +184,29 @@ const DEFAULT_EFFORTS: &[&str] = &["xs", "s", "m", "l"];
 fn root_version_components() -> Result<(u64, u64, String)> {
     let raw = option_env!("MT_ROOT_VERSION").ok_or_else(|| anyhow!("missing MT_ROOT_VERSION build metadata"))?;
     let trimmed = raw.trim();
-    let (major_raw, minor_raw) = trimmed
-        .split_once('.')
+    let mut parts = trimmed.split('.');
+    let major_raw = parts
+        .next()
         .ok_or_else(|| anyhow!("invalid root VERSION format in build metadata: {trimmed}"))?;
+    let minor_raw = parts
+        .next()
+        .ok_or_else(|| anyhow!("invalid root VERSION format in build metadata: {trimmed}"))?;
+    let patch_raw = parts.next();
+    if parts.next().is_some() {
+        return Err(anyhow!("invalid root VERSION format in build metadata: {trimmed}"));
+    }
     let major = major_raw
         .parse::<u64>()
         .with_context(|| format!("invalid major version in root VERSION: {major_raw}"))?;
     let minor = minor_raw
         .parse::<u64>()
         .with_context(|| format!("invalid minor version in root VERSION: {minor_raw}"))?;
-    Ok((major, minor, format!("{major}.{minor}")))
+    if let Some(patch_raw) = patch_raw {
+        let _ = patch_raw
+            .parse::<u64>()
+            .with_context(|| format!("invalid patch version in root VERSION: {patch_raw}"))?;
+    }
+    Ok((major, minor, trimmed.to_string()))
 }
 
 fn priority_weight(priority: &str) -> i32 {
