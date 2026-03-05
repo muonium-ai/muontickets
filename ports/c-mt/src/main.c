@@ -33,6 +33,7 @@ static int find_in_path(const char *cmd, char *out, size_t out_size);
 static int find_repo_root(char *out, size_t out_size);
 static int dirname_from_path(const char *path, char *out, size_t out_size);
 static int find_repo_root_from_dir(const char *start_dir, char *out, size_t out_size);
+static int find_mt_entry_from_dir(const char *start_dir, char *out, size_t out_size);
 static int is_valid_ticket_id(const char *id);
 static char *xstrdup(const char *s);
 static void trim_inplace(char *s);
@@ -1764,6 +1765,30 @@ static int find_repo_root_from_dir(const char *start_dir, char *out, size_t out_
     return 0;
 }
 
+static int find_mt_entry_from_dir(const char *start_dir, char *out, size_t out_size) {
+    char cur[PATH_MAX];
+    char mt_path[PATH_MAX];
+
+    if (start_dir == NULL || start_dir[0] == '\0') {
+        return 0;
+    }
+    strncpy(cur, start_dir, sizeof(cur) - 1);
+    cur[sizeof(cur) - 1] = '\0';
+
+    while (1) {
+        join_path(mt_path, sizeof(mt_path), cur, "mt.py");
+        if (path_is_file(mt_path)) {
+            strncpy(out, mt_path, out_size - 1);
+            out[out_size - 1] = '\0';
+            return 1;
+        }
+        if (!parent_dir(cur)) {
+            break;
+        }
+    }
+    return 0;
+}
+
 #if defined(_WIN32)
 static int run_cmd(const char *python_exe, const char *script_path, int argc, char **argv) {
     int i;
@@ -1844,6 +1869,8 @@ int main(int argc, char **argv) {
 
     char repo_root[PATH_MAX];
     char auto_entry[PATH_MAX];
+    char exe_dir[PATH_MAX];
+    char exe_abs[PATH_MAX];
     int version_json = 0;
     int new_rc = 0;
 
@@ -1883,6 +1910,10 @@ int main(int argc, char **argv) {
         entry = env_entry;
     } else if (resolve_repo_root(repo_root, sizeof(repo_root), argc, argv)) {
         join_path(auto_entry, sizeof(auto_entry), repo_root, "mt.py");
+        entry = auto_entry;
+    } else if (argc > 0 && argv[0] != NULL && argv[0][0] != '\0' && dirname_from_path(argv[0], exe_dir, sizeof(exe_dir)) && find_mt_entry_from_dir(exe_dir, auto_entry, sizeof(auto_entry))) {
+        entry = auto_entry;
+    } else if (argc > 0 && argv[0] != NULL && argv[0][0] != '\0' && find_in_path(argv[0], exe_abs, sizeof(exe_abs)) && dirname_from_path(exe_abs, exe_dir, sizeof(exe_dir)) && find_mt_entry_from_dir(exe_dir, auto_entry, sizeof(auto_entry))) {
         entry = auto_entry;
     } else {
         entry = "mt.py";
