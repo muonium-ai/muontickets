@@ -115,8 +115,40 @@ jobs:
           path: ports/zig-mt/dist/*
           if-no-files-found: error
 
+  build-c:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.12.0
+
+      - name: Build C cross-platform release artifacts
+        working-directory: ports/c-mt
+        shell: bash
+        run: |
+          chmod +x scripts/release.sh
+          ./scripts/release.sh --targets aarch64-macos,x86_64-macos,x86_64-linux,aarch64-linux,x86_64-windows
+
+      - name: Verify C release checksums
+        working-directory: ports/c-mt
+        shell: bash
+        run: |
+          chmod +x scripts/verify-release.sh
+          ./scripts/verify-release.sh
+
+      - name: Upload C release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-c-dist
+          path: ports/c-mt/dist/*
+          if-no-files-found: error
+
   publish:
-    needs: [build-rust, build-zig]
+    needs: [build-rust, build-zig, build-c]
     runs-on: ubuntu-latest
     if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
     steps:
@@ -146,6 +178,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: combined-zig-dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download C release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: combined-c-dist*
           path: dist
           merge-multiple: true
 

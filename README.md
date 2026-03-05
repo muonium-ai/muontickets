@@ -260,9 +260,9 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py report --search auth --l
 
 By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data from `tickets/`, `tickets/archive/`, `tickets/errors/`, and `tickets/backlogs/`.
 
-## Rust Binary Releases (Preview)
+## Binary Releases (Preview)
 
-Unified multi-platform release (Rust + Zig together):
+Unified multi-platform release (Rust + Zig + C together):
 
 ```bash
 # Push a tag like v0.9.0 to build Linux/macOS/Windows native artifacts
@@ -270,12 +270,14 @@ git tag v0.9.0
 git push origin v0.9.0
 ```
 
-This triggers `.github/workflows/combined-release.yml` and publishes release assets for both implementations:
+This triggers `.github/workflows/combined-release.yml` and publishes release assets for all implementations:
 
 - `mt-rust-<arch>-<os>.tar.gz` (Linux/macOS)
 - `mt-rust-<arch>-windows.zip` (Windows)
 - `mt-zig-<arch>-<os>.tar.gz` (Linux/macOS)
 - `mt-zig-<arch>-windows.zip` (Windows)
+- `mt-c-<arch>-<os>.tar.gz` (Linux/macOS)
+- `mt-c-<arch>-windows.zip` (Windows)
 - `SHA256SUMS`, `SHA256SUMS.sig`, `SHA256SUMS.pem`
 
 Detailed operator runbook: see [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).

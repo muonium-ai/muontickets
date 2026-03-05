@@ -1,4 +1,4 @@
-# Release Checklist (Unified Rust + Zig)
+# Release Checklist (Unified Rust + Zig + C)
 
 This checklist is for publishing a combined multi-platform release from this repository.
 
@@ -14,6 +14,8 @@ Outputs (GitHub Release assets):
 - `mt-rust-<arch>-windows.zip` (Windows)
 - `mt-zig-<arch>-<os>.tar.gz` (Linux/macOS)
 - `mt-zig-<arch>-windows.zip` (Windows)
+- `mt-c-<arch>-<os>.tar.gz` (Linux/macOS)
+- `mt-c-<arch>-windows.zip` (Windows)
 - `SHA256SUMS`, `SHA256SUMS.sig`, `SHA256SUMS.pem`
 
 ## 1) Pre-release checks
@@ -52,6 +54,7 @@ In GitHub Actions:
 - Wait for `.github/workflows/combined-release.yml` jobs:
   - `build-rust` matrix (Linux/macOS/Windows)
   - `build-zig` matrix (Linux/macOS/Windows)
+  - `build-c` (cross-target build for macOS/Linux/Windows artifacts)
   - `publish`
 
 Release should appear under GitHub Releases for tag `v0.9.0`.
@@ -80,6 +83,9 @@ tar -xzf mt-rust-<arch>-<os>.tar.gz
 
 tar -xzf mt-zig-<arch>-<os>.tar.gz
 ./mt-zig-<arch>-<os>/mt-zig --version
+
+tar -xzf mt-c-<arch>-<os>.tar.gz
+./mt-c-<arch>-<os>/mt-c --version
 ```
 
 ### Windows (PowerShell)
@@ -90,6 +96,9 @@ Expand-Archive -Path mt-rust-<arch>-windows.zip -DestinationPath .
 
 Expand-Archive -Path mt-zig-<arch>-windows.zip -DestinationPath .
 .\mt-zig-<arch>-windows\mt-zig.exe --version
+
+Expand-Archive -Path mt-c-<arch>-windows.zip -DestinationPath .
+.\mt-c-<arch>-windows\mt-c.exe --version
 ```
 
 ## 6) Roll-forward/rollback notes
