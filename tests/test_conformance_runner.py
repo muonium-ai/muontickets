@@ -253,6 +253,75 @@ class ConformanceRunnerTests(unittest.TestCase):
             self.assertIn("updated", init_second.stdout + init_second.stderr)
             self.assertIn("T-000123", (root / "tickets" / "last_ticket_id").read_text(encoding="utf-8"))
 
+    def test_c_native_new_template_defaults_and_overrides(self) -> None:
+        c_bin = self.get_c_bin()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+            subprocess.run([c_bin, "init"], cwd=str(root), check=True, capture_output=True, text=True)
+
+            template = textwrap.dedent(
+                """\
+                ---
+                id: T-000000
+                title: Template: replace title
+                status: blocked
+                priority: p0
+                type: docs
+                effort: l
+                labels: [alpha, beta]
+                tags: [tmpl]
+                owner: agent-x
+                created: 1970-01-01T00:00:00Z
+                updated: 1970-01-01T00:00:00Z
+                depends_on: [T-000123]
+                branch: feat/template-defaults
+                retry_count: 0
+                retry_limit: 3
+                allocated_to: null
+                allocated_at: null
+                lease_expires_at: null
+                last_error: null
+                last_attempted_at: null
+                ---
+
+                ## Goal
+                Template goal body.
+
+                ## Acceptance Criteria
+                - [ ] Template AC
+
+                ## Notes
+                """
+            )
+            (root / "tickets" / "ticket.template").write_text(template, encoding="utf-8")
+
+            created = subprocess.run(
+                [c_bin, "new", "From Template", "--label", "cli", "--depends-on", "T-000001", "--goal", "Goal override"],
+                cwd=str(root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn("T-000002.md", created.stdout + created.stderr)
+
+            shown = subprocess.run([c_bin, "show", "T-000002"], cwd=str(root), check=True, capture_output=True, text=True)
+            text = shown.stdout + shown.stderr
+            self.assertIn("status: blocked", text)
+            self.assertIn("priority: p0", text)
+            self.assertIn("type: docs", text)
+            self.assertIn("effort: l", text)
+            self.assertIn("labels:", text)
+            self.assertIn("- cli", text)
+            self.assertIn("tags:", text)
+            self.assertIn("- tmpl", text)
+            self.assertIn("depends_on:", text)
+            self.assertIn("- T-000001", text)
+            self.assertIn("owner: agent-x", text)
+            self.assertIn("branch: feat/template-defaults", text)
+            self.assertIn("Goal override", text)
+
     def test_zig_new_uses_template_defaults(self) -> None:
         zig_bin = self.get_zig_bin()
 

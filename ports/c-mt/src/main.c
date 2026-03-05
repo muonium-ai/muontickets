@@ -89,6 +89,50 @@ static const char *EXAMPLE_BODY =
     "## Notes\n"
     "This repository uses MuonTickets for agent-friendly coordination.\n";
 
+#define MAX_ITEMS 64
+#define MAX_ITEM_LEN 128
+
+struct StringList {
+    int count;
+    char items[MAX_ITEMS][MAX_ITEM_LEN];
+};
+
+struct TemplateDefaults {
+    int has_template;
+    char status[32];
+    char priority[32];
+    char type[32];
+    char effort[32];
+    int owner_is_null;
+    char owner[128];
+    int branch_is_null;
+    char branch[128];
+    struct StringList labels;
+    struct StringList tags;
+    struct StringList depends_on;
+    char *body;
+};
+
+struct NewArgs {
+    const char *title;
+    const char *priority;
+    const char *type;
+    const char *effort;
+    const char *goal;
+    struct StringList labels;
+    struct StringList tags;
+    struct StringList depends_on;
+};
+
+static const char *DEFAULT_NEW_BODY =
+    "## Goal\n"
+    "Write a single-sentence goal.\n"
+    "\n"
+    "## Acceptance Criteria\n"
+    "- [ ] Define clear, testable checks (2-5 items)\n"
+    "\n"
+    "## Notes\n";
+
 static const char *runtime_platform(void) {
 #if defined(_WIN32)
     return "win32";
@@ -433,8 +477,8 @@ static int write_example_ticket(const char *tickets_dir, int ticket_n) {
             "labels: [example]\n"
             "tags: []\n"
             "owner: null\n"
-            "created: %s\n"
-            "updated: %s\n"
+            "created: \"%s\"\n"
+            "updated: \"%s\"\n"
             "depends_on: []\n"
             "branch: null\n"
             "retry_count: 0\n"
@@ -460,6 +504,477 @@ static int write_example_ticket(const char *tickets_dir, int ticket_n) {
 
 static int should_handle_native_init(int argc, char **argv) {
     return argc == 2 && strcmp(argv[1], "init") == 0;
+}
+
+static int should_handle_native_new(int argc, char **argv) {
+    return argc >= 3 && strcmp(argv[1], "new") == 0;
+}
+
+static char *xstrdup(const char *s) {
+    size_t n;
+    char *p;
+    if (s == NULL) {
+        return NULL;
+    }
+    n = strlen(s);
+    p = (char *)malloc(n + 1);
+    if (p == NULL) {
+        return NULL;
+    }
+    memcpy(p, s, n + 1);
+    return p;
+}
+
+static void trim_inplace(char *s) {
+    size_t i, start = 0, end;
+    if (s == NULL) {
+        return;
+    }
+    end = strlen(s);
+    while (start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r')) {
+        start++;
+    }
+    while (end > start && (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == '\n' || s[end - 1] == '\r')) {
+        end--;
+    }
+    if (start > 0) {
+        for (i = start; i < end; i++) {
+            s[i - start] = s[i];
+        }
+    }
+    s[end - start] = '\0';
+}
+
+static void unquote_inplace(char *s) {
+    size_t n;
+    if (s == NULL) {
+        return;
+    }
+    n = strlen(s);
+    if (n >= 2 && ((s[0] == '"' && s[n - 1] == '"') || (s[0] == '\'' && s[n - 1] == '\''))) {
+        memmove(s, s + 1, n - 2);
+        s[n - 2] = '\0';
+    }
+}
+
+static int string_list_append(struct StringList *lst, const char *v) {
+    if (lst->count >= MAX_ITEMS) {
+        return 1;
+    }
+    strncpy(lst->items[lst->count], v, MAX_ITEM_LEN - 1);
+    lst->items[lst->count][MAX_ITEM_LEN - 1] = '\0';
+    lst->count++;
+    return 0;
+}
+
+static void parse_bracket_list(const char *raw, struct StringList *out) {
+    char buf[2048];
+    char *p;
+    char *start;
+    if (raw == NULL) {
+        return;
+    }
+    strncpy(buf, raw, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    trim_inplace(buf);
+    if (buf[0] == '[') {
+        char *end = strrchr(buf, ']');
+        if (end != NULL) {
+            *end = '\0';
+            memmove(buf, buf + 1, strlen(buf));
+        }
+    }
+    p = buf;
+    start = buf;
+    while (1) {
+        if (*p == ',' || *p == '\0') {
+            char saved = *p;
+            char v[MAX_ITEM_LEN];
+            *p = '\0';
+            strncpy(v, start, sizeof(v) - 1);
+            v[sizeof(v) - 1] = '\0';
+            trim_inplace(v);
+            unquote_inplace(v);
+            if (v[0] != '\0') {
+                string_list_append(out, v);
+            }
+            if (saved == '\0') {
+                break;
+            }
+            start = p + 1;
+        }
+        p++;
+    }
+}
+
+static int read_all_text(const char *path, char **out_text) {
+    FILE *f;
+    long sz;
+    char *buf;
+    size_t nread;
+    *out_text = NULL;
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        return 1;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return 1;
+    }
+    sz = ftell(f);
+    if (sz < 0) {
+        fclose(f);
+        return 1;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return 1;
+    }
+    buf = (char *)malloc((size_t)sz + 1);
+    if (buf == NULL) {
+        fclose(f);
+        return 1;
+    }
+    nread = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[nread] = '\0';
+    *out_text = buf;
+    return 0;
+}
+
+static int parse_template_file(const char *template_path, struct TemplateDefaults *tpl) {
+    char *text = NULL;
+    char *fm_start;
+    char *fm_end;
+    char *body_start;
+    char *line;
+
+    memset(tpl, 0, sizeof(*tpl));
+    strcpy(tpl->status, "ready");
+    strcpy(tpl->priority, "p1");
+    strcpy(tpl->type, "code");
+    strcpy(tpl->effort, "s");
+    tpl->owner_is_null = 1;
+    tpl->branch_is_null = 1;
+
+    if (!path_exists(template_path)) {
+        return 0;
+    }
+    if (read_all_text(template_path, &text) != 0 || text == NULL) {
+        fprintf(stderr, "Invalid ticket template at %s: unreadable file\n", template_path);
+        return 2;
+    }
+
+    if (strncmp(text, "---", 3) != 0) {
+        fprintf(stderr, "Invalid ticket template at %s: Missing YAML frontmatter\n", template_path);
+        free(text);
+        return 2;
+    }
+    fm_start = text + 3;
+    if (*fm_start == '\r') {
+        fm_start++;
+    }
+    if (*fm_start == '\n') {
+        fm_start++;
+    }
+    fm_end = strstr(fm_start, "\n---");
+    if (fm_end == NULL) {
+        fprintf(stderr, "Invalid ticket template at %s: Unterminated YAML frontmatter\n", template_path);
+        free(text);
+        return 2;
+    }
+    *fm_end = '\0';
+    body_start = fm_end + 4;
+    if (*body_start == '\r') {
+        body_start++;
+    }
+    if (*body_start == '\n') {
+        body_start++;
+    }
+
+    line = strtok(fm_start, "\n");
+    while (line != NULL) {
+        char *colon = strchr(line, ':');
+        if (colon != NULL) {
+            char key[128];
+            char val[512];
+            size_t klen = (size_t)(colon - line);
+            if (klen >= sizeof(key)) {
+                klen = sizeof(key) - 1;
+            }
+            memcpy(key, line, klen);
+            key[klen] = '\0';
+            strncpy(val, colon + 1, sizeof(val) - 1);
+            val[sizeof(val) - 1] = '\0';
+            trim_inplace(key);
+            trim_inplace(val);
+            unquote_inplace(val);
+
+            if (strcmp(key, "status") == 0) {
+                strncpy(tpl->status, val, sizeof(tpl->status) - 1);
+            } else if (strcmp(key, "priority") == 0) {
+                strncpy(tpl->priority, val, sizeof(tpl->priority) - 1);
+            } else if (strcmp(key, "type") == 0) {
+                strncpy(tpl->type, val, sizeof(tpl->type) - 1);
+            } else if (strcmp(key, "effort") == 0) {
+                strncpy(tpl->effort, val, sizeof(tpl->effort) - 1);
+            } else if (strcmp(key, "labels") == 0) {
+                parse_bracket_list(val, &tpl->labels);
+            } else if (strcmp(key, "tags") == 0) {
+                parse_bracket_list(val, &tpl->tags);
+            } else if (strcmp(key, "depends_on") == 0) {
+                parse_bracket_list(val, &tpl->depends_on);
+            } else if (strcmp(key, "owner") == 0) {
+                if (strcmp(val, "null") == 0 || val[0] == '\0') {
+                    tpl->owner_is_null = 1;
+                    tpl->owner[0] = '\0';
+                } else {
+                    tpl->owner_is_null = 0;
+                    strncpy(tpl->owner, val, sizeof(tpl->owner) - 1);
+                }
+            } else if (strcmp(key, "branch") == 0) {
+                if (strcmp(val, "null") == 0 || val[0] == '\0') {
+                    tpl->branch_is_null = 1;
+                    tpl->branch[0] = '\0';
+                } else {
+                    tpl->branch_is_null = 0;
+                    strncpy(tpl->branch, val, sizeof(tpl->branch) - 1);
+                }
+            }
+        }
+        line = strtok(NULL, "\n");
+    }
+
+    tpl->body = xstrdup(body_start);
+    tpl->has_template = 1;
+    free(text);
+    return 0;
+}
+
+static void format_list_yaml(FILE *f, const struct StringList *lst) {
+    int i;
+    fputs("[", f);
+    for (i = 0; i < lst->count; i++) {
+        if (i > 0) {
+            fputs(", ", f);
+        }
+        fputs(lst->items[i], f);
+    }
+    fputs("]", f);
+}
+
+static int validate_choice(const char *value, const char *const *choices, int n, const char *name) {
+    int i;
+    for (i = 0; i < n; i++) {
+        if (strcmp(value, choices[i]) == 0) {
+            return 0;
+        }
+    }
+    fprintf(stderr, "Invalid %s %s from CLI/template.\n", name, value);
+    return 2;
+}
+
+static int parse_new_args(int argc, char **argv, struct NewArgs *na) {
+    int i;
+    memset(na, 0, sizeof(*na));
+    na->title = argv[2];
+    for (i = 3; i < argc; i++) {
+        const char *a = argv[i];
+        if ((strcmp(a, "--priority") == 0 || strcmp(a, "--type") == 0 || strcmp(a, "--effort") == 0 ||
+             strcmp(a, "--label") == 0 || strcmp(a, "--tag") == 0 || strcmp(a, "--depends-on") == 0 || strcmp(a, "--goal") == 0)) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "new: argument %s requires a value\n", a);
+                return 2;
+            }
+            if (strcmp(a, "--priority") == 0) {
+                na->priority = argv[++i];
+            } else if (strcmp(a, "--type") == 0) {
+                na->type = argv[++i];
+            } else if (strcmp(a, "--effort") == 0) {
+                na->effort = argv[++i];
+            } else if (strcmp(a, "--goal") == 0) {
+                na->goal = argv[++i];
+            } else if (strcmp(a, "--label") == 0) {
+                if (string_list_append(&na->labels, argv[++i]) != 0) {
+                    return 2;
+                }
+            } else if (strcmp(a, "--tag") == 0) {
+                if (string_list_append(&na->tags, argv[++i]) != 0) {
+                    return 2;
+                }
+            } else if (strcmp(a, "--depends-on") == 0) {
+                if (string_list_append(&na->depends_on, argv[++i]) != 0) {
+                    return 2;
+                }
+            }
+        } else {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int cmd_new_native(int argc, char **argv) {
+    char repo_root[PATH_MAX];
+    char tickets_path[PATH_MAX];
+    char template_path[PATH_MAX];
+    char ticket_path[PATH_MAX];
+    char created[32];
+    char updated[32];
+    int tracked = 0;
+    int scanned = 0;
+    int has_tracked = 0;
+    int next_n;
+    FILE *f;
+    struct NewArgs na;
+    struct TemplateDefaults tpl;
+    const char *priority;
+    const char *type;
+    const char *effort;
+    const char *status;
+    const struct StringList *labels;
+    const struct StringList *tags;
+    const struct StringList *deps;
+    int rc;
+    const char *const priorities[] = {"p0", "p1", "p2"};
+    const char *const types[] = {"spec", "code", "tests", "docs", "refactor", "chore"};
+    const char *const efforts[] = {"xs", "s", "m", "l"};
+
+    rc = parse_new_args(argc, argv, &na);
+    if (rc == -1) {
+        return -1;
+    }
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (getcwd(repo_root, sizeof(repo_root)) == NULL) {
+        fprintf(stderr, "could not determine working directory\n");
+        return 2;
+    }
+    join_path(tickets_path, sizeof(tickets_path), repo_root, "tickets");
+    if (make_dir_if_missing(tickets_path) != 0) {
+        return 1;
+    }
+
+    join_path(template_path, sizeof(template_path), tickets_path, "ticket.template");
+    rc = parse_template_file(template_path, &tpl);
+    if (rc != 0) {
+        return rc;
+    }
+
+    has_tracked = read_last_ticket_number_file(tickets_path, &tracked);
+    scanned = scan_ticket_max_all_buckets(tickets_path);
+    next_n = (has_tracked && tracked > scanned ? tracked : scanned) + 1;
+
+    priority = na.priority != NULL ? na.priority : tpl.priority;
+    type = na.type != NULL ? na.type : tpl.type;
+    effort = na.effort != NULL ? na.effort : tpl.effort;
+    status = tpl.status[0] != '\0' ? tpl.status : "ready";
+    if (strcmp(status, "ready") && strcmp(status, "claimed") && strcmp(status, "blocked") && strcmp(status, "needs_review") && strcmp(status, "done")) {
+        status = "ready";
+    }
+
+    if (validate_choice(priority, priorities, 3, "priority") != 0) {
+        free(tpl.body);
+        return 2;
+    }
+    if (validate_choice(type, types, 6, "type") != 0) {
+        free(tpl.body);
+        return 2;
+    }
+    if (validate_choice(effort, efforts, 4, "effort") != 0) {
+        free(tpl.body);
+        return 2;
+    }
+
+    labels = na.labels.count > 0 ? &na.labels : &tpl.labels;
+    tags = na.tags.count > 0 ? &na.tags : &tpl.tags;
+    deps = na.depends_on.count > 0 ? &na.depends_on : &tpl.depends_on;
+
+    snprintf(ticket_path, sizeof(ticket_path), "%s%cT-%06d.md", tickets_path, PATH_SEP, next_n);
+    f = fopen(ticket_path, "w");
+    if (f == NULL) {
+        fprintf(stderr, "failed to write '%s': %s\n", ticket_path, strerror(errno));
+        free(tpl.body);
+        return 1;
+    }
+
+    now_utc_iso(created, sizeof(created));
+    now_utc_iso(updated, sizeof(updated));
+
+    fprintf(f,
+            "---\n"
+            "id: T-%06d\n"
+            "title: %s\n"
+            "status: %s\n"
+            "priority: %s\n"
+            "type: %s\n"
+            "effort: %s\n"
+            "labels: ",
+            next_n,
+            na.title,
+            status,
+            priority,
+            type,
+            effort);
+    format_list_yaml(f, labels);
+    fputs("\ntags: ", f);
+    format_list_yaml(f, tags);
+    fputs("\nowner: ", f);
+    if (tpl.owner_is_null) {
+        fputs("null", f);
+    } else {
+        fputs(tpl.owner, f);
+    }
+        fprintf(f,
+            "\ncreated: \"%s\"\n"
+            "updated: \"%s\"\n"
+            "depends_on: ",
+            created,
+            updated);
+    format_list_yaml(f, deps);
+    fputs("\nbranch: ", f);
+    if (tpl.branch_is_null) {
+        fputs("null", f);
+    } else {
+        fputs(tpl.branch, f);
+    }
+    fputs("\nretry_count: 0\nretry_limit: 3\nallocated_to: null\nallocated_at: null\nlease_expires_at: null\nlast_error: null\nlast_attempted_at: null\n---\n\n", f);
+
+    if (na.goal != NULL && na.goal[0] != '\0') {
+        fprintf(f,
+                "## Goal\n"
+                "%s\n\n"
+                "## Acceptance Criteria\n"
+                "- [ ] Define clear, testable checks (2-5 items)\n\n"
+                "## Notes\n",
+                na.goal);
+    } else if (tpl.body != NULL && tpl.body[0] != '\0') {
+        fputs(tpl.body, f);
+        if (tpl.body[strlen(tpl.body) - 1] != '\n') {
+            fputc('\n', f);
+        }
+    } else {
+        fputs(DEFAULT_NEW_BODY, f);
+        if (DEFAULT_NEW_BODY[strlen(DEFAULT_NEW_BODY) - 1] != '\n') {
+            fputc('\n', f);
+        }
+    }
+
+    if (fclose(f) != 0) {
+        fprintf(stderr, "failed to close '%s': %s\n", ticket_path, strerror(errno));
+        free(tpl.body);
+        return 1;
+    }
+    if (write_last_ticket_number_file(tickets_path, next_n) != 0) {
+        free(tpl.body);
+        return 1;
+    }
+
+    printf("%s\n", ticket_path);
+    free(tpl.body);
+    return 0;
 }
 
 static int cmd_init_native(int argc, char **argv) {
@@ -800,9 +1315,17 @@ int main(int argc, char **argv) {
     char repo_root[PATH_MAX];
     char auto_entry[PATH_MAX];
     int version_json = 0;
+    int new_rc = 0;
 
     if (should_handle_native_init(argc, argv)) {
         return cmd_init_native(argc, argv);
+    }
+
+    if (should_handle_native_new(argc, argv)) {
+        new_rc = cmd_new_native(argc, argv);
+        if (new_rc >= 0) {
+            return new_rc;
+        }
     }
 
     if (should_handle_native_version(argc, argv, &version_json)) {
