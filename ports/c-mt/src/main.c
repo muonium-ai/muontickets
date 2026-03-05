@@ -510,6 +510,69 @@ static int should_handle_native_new(int argc, char **argv) {
     return argc >= 3 && strcmp(argv[1], "new") == 0;
 }
 
+static int should_handle_native_show(int argc, char **argv) {
+    return argc == 3 && strcmp(argv[1], "show") == 0;
+}
+
+static int is_valid_ticket_id(const char *id) {
+    int n = 0;
+    char extra = '\0';
+    if (id == NULL) {
+        return 0;
+    }
+    if (sscanf(id, "T-%6d%c", &n, &extra) != 1) {
+        return 0;
+    }
+    return n >= 0;
+}
+
+static int print_file_to_stdout(const char *path) {
+    FILE *f;
+    char buf[4096];
+    size_t n;
+
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        fprintf(stderr, "Ticket not found: %s\n", path);
+        return 2;
+    }
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (fwrite(buf, 1, n, stdout) != n) {
+            fclose(f);
+            fprintf(stderr, "failed writing ticket content\n");
+            return 1;
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+static int cmd_show_native(int argc, char **argv) {
+    char repo_root[PATH_MAX];
+    char tickets_path[PATH_MAX];
+    char ticket_path[PATH_MAX];
+    const char *id;
+
+    (void)argc;
+
+    id = argv[2];
+    if (!is_valid_ticket_id(id)) {
+        fprintf(stderr, "Invalid ticket id: %s\n", id != NULL ? id : "<null>");
+        return 2;
+    }
+
+    if (!find_repo_root(repo_root, sizeof(repo_root))) {
+        if (getcwd(repo_root, sizeof(repo_root)) == NULL) {
+            fprintf(stderr, "could not determine working directory\n");
+            return 2;
+        }
+    }
+
+    join_path(tickets_path, sizeof(tickets_path), repo_root, "tickets");
+    snprintf(ticket_path, sizeof(ticket_path), "%s%c%s.md", tickets_path, PATH_SEP, id);
+    return print_file_to_stdout(ticket_path);
+}
+
 static char *xstrdup(const char *s) {
     size_t n;
     char *p;
@@ -1326,6 +1389,10 @@ int main(int argc, char **argv) {
         if (new_rc >= 0) {
             return new_rc;
         }
+    }
+
+    if (should_handle_native_show(argc, argv)) {
+        return cmd_show_native(argc, argv);
     }
 
     if (should_handle_native_version(argc, argv, &version_json)) {

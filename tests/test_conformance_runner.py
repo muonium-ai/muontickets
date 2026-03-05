@@ -312,15 +312,35 @@ class ConformanceRunnerTests(unittest.TestCase):
             self.assertIn("priority: p0", text)
             self.assertIn("type: docs", text)
             self.assertIn("effort: l", text)
-            self.assertIn("labels:", text)
-            self.assertIn("- cli", text)
-            self.assertIn("tags:", text)
-            self.assertIn("- tmpl", text)
-            self.assertIn("depends_on:", text)
-            self.assertIn("- T-000001", text)
+            self.assertTrue("labels: [cli]" in text or "- cli" in text)
+            self.assertTrue("tags: [tmpl]" in text or "- tmpl" in text)
+            self.assertTrue("depends_on: [T-000001]" in text or "- T-000001" in text)
             self.assertIn("owner: agent-x", text)
             self.assertIn("branch: feat/template-defaults", text)
             self.assertIn("Goal override", text)
+
+    def test_c_native_show_without_python_entrypoint(self) -> None:
+        c_bin = self.get_c_bin()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+
+            env = dict(os.environ)
+            env["MT_PY_ENTRY"] = str(root / "missing-mt.py")
+
+            init_proc = subprocess.run([c_bin, "init"], cwd=str(root), env=env, capture_output=True, text=True)
+            self.assertEqual(init_proc.returncode, 0, msg=f"stdout:\n{init_proc.stdout}\nstderr:\n{init_proc.stderr}")
+
+            new_proc = subprocess.run([c_bin, "new", "Native Show Ticket"], cwd=str(root), env=env, capture_output=True, text=True)
+            self.assertEqual(new_proc.returncode, 0, msg=f"stdout:\n{new_proc.stdout}\nstderr:\n{new_proc.stderr}")
+            self.assertIn("T-000002.md", new_proc.stdout + new_proc.stderr)
+
+            show_proc = subprocess.run([c_bin, "show", "T-000002"], cwd=str(root), env=env, capture_output=True, text=True)
+            self.assertEqual(show_proc.returncode, 0, msg=f"stdout:\n{show_proc.stdout}\nstderr:\n{show_proc.stderr}")
+            text = show_proc.stdout + show_proc.stderr
+            self.assertIn("id: T-000002", text)
+            self.assertIn("title: Native Show Ticket", text)
 
     def test_zig_new_uses_template_defaults(self) -> None:
         zig_bin = self.get_zig_bin()
