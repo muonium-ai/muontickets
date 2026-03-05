@@ -23,6 +23,8 @@
 #define PATH_MAX 4096
 #endif
 
+struct StringList;
+
 static int path_is_file(const char *path);
 static int path_is_dir(const char *path);
 static int path_exists(const char *path);
@@ -31,6 +33,11 @@ static int find_in_path(const char *cmd, char *out, size_t out_size);
 static int find_repo_root(char *out, size_t out_size);
 static int dirname_from_path(const char *path, char *out, size_t out_size);
 static int find_repo_root_from_dir(const char *start_dir, char *out, size_t out_size);
+static int is_valid_ticket_id(const char *id);
+static char *xstrdup(const char *s);
+static void trim_inplace(char *s);
+static void parse_bracket_list(const char *raw, struct StringList *out);
+static int read_all_text(const char *path, char **out_text);
 
 static const char *DEFAULT_TEMPLATE_TEXT =
     "---\n"
@@ -512,6 +519,470 @@ static int should_handle_native_new(int argc, char **argv) {
 
 static int should_handle_native_show(int argc, char **argv) {
     return argc == 3 && strcmp(argv[1], "show") == 0;
+}
+
+static int should_handle_native_comment(int argc, char **argv) {
+    return argc >= 4 && strcmp(argv[1], "comment") == 0;
+}
+
+static int should_handle_native_done_force(int argc, char **argv) {
+    return argc == 4 && strcmp(argv[1], "done") == 0 && strcmp(argv[3], "--force") == 0;
+}
+
+static int should_handle_native_archive_force(int argc, char **argv) {
+    return argc == 4 && strcmp(argv[1], "archive") == 0 && strcmp(argv[3], "--force") == 0;
+}
+
+static int today_utc(char *buf, size_t buf_size) {
+    time_t t = time(NULL);
+    struct tm tm_utc;
+#if defined(_WIN32)
+    if (gmtime_s(&tm_utc, &t) != 0) {
+        return 1;
+    }
+#else
+    if (gmtime_r(&t, &tm_utc) == NULL) {
+        return 1;
+    }
+#endif
+    if (strftime(buf, buf_size, "%Y-%m-%d", &tm_utc) == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int resolve_repo_or_cwd(char *repo_root, size_t repo_root_size) {
+    if (find_repo_root(repo_root, repo_root_size)) {
+        return 1;
+    }
+    return getcwd(repo_root, repo_root_size) != NULL;
+}
+
+static int resolve_ticket_path(const char *repo_root, const char *id, char *ticket_path, size_t ticket_path_size) {
+    char tickets_path[PATH_MAX];
+    if (!is_valid_ticket_id(id)) {
+        fprintf(stderr, "Invalid ticket id: %s\n", id != NULL ? id : "<null>");
+        return 2;
+    }
+    join_path(tickets_path, sizeof(tickets_path), repo_root, "tickets");
+    snprintf(ticket_path, ticket_path_size, "%s%c%s.md", tickets_path, PATH_SEP, id);
+    return 0;
+}
+
+static char *substring_dup(const char *start, size_t n) {
+    char *p = (char *)malloc(n + 1);
+    if (p == NULL) {
+        return NULL;
+    }
+    memcpy(p, start, n);
+    p[n] = '\0';
+    return p;
+}
+
+static int split_ticket_sections(const char *text, char **fm, char **body) {
+    const char *fm_start;
+    const char *fm_end;
+    const char *body_start;
+
+    if (text == NULL || strncmp(text, "---", 3) != 0) {
+        return 1;
+    }
+    fm_start = text + 3;
+    if (*fm_start == '\r') {
+        fm_start++;
+    }
+    if (*fm_start == '\n') {
+        fm_start++;
+    }
+    fm_end = strstr(fm_start, "\n---");
+    if (fm_end == NULL) {
+        return 1;
+    }
+    body_start = fm_end + 4;
+    if (*body_start == '\r') {
+        body_start++;
+    }
+    if (*body_start == '\n') {
+        body_start++;
+    }
+
+    *fm = substring_dup(fm_start, (size_t)(fm_end - fm_start));
+    *body = xstrdup(body_start);
+    if (*fm == NULL || *body == NULL) {
+        free(*fm);
+        free(*body);
+        *fm = NULL;
+        *body = NULL;
+        return 1;
+    }
+    return 0;
+}
+
+static int frontmatter_depends_on_id(const char *fm, const char *target_id) {
+    char *copy;
+    char *line;
+    struct StringList deps;
+    int i;
+
+    memset(&deps, 0, sizeof(deps));
+    copy = xstrdup(fm != NULL ? fm : "");
+    if (copy == NULL) {
+        return 0;
+    }
+
+    line = strtok(copy, "\n");
+    while (line != NULL) {
+        if (strncmp(line, "depends_on:", 11) == 0) {
+            char val[1024];
+            strncpy(val, line + 11, sizeof(val) - 1);
+            val[sizeof(val) - 1] = '\0';
+            trim_inplace(val);
+            parse_bracket_list(val, &deps);
+            break;
+        }
+        line = strtok(NULL, "\n");
+    }
+
+    free(copy);
+    for (i = 0; i < deps.count; i++) {
+        if (strcmp(deps.items[i], target_id) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static char *build_updated_frontmatter(const char *fm, const char *updated_iso, const char *status_override) {
+    char *copy;
+    char *line;
+    size_t cap = (fm != NULL ? strlen(fm) : 0) + 512;
+    size_t len = 0;
+    int saw_updated = 0;
+    int saw_status = 0;
+    char *out = (char *)malloc(cap);
+    if (out == NULL) {
+        return NULL;
+    }
+    out[0] = '\0';
+
+    copy = xstrdup(fm != NULL ? fm : "");
+    if (copy == NULL) {
+        free(out);
+        return NULL;
+    }
+
+    line = strtok(copy, "\n");
+    while (line != NULL) {
+        char row[1024];
+        if (strncmp(line, "updated:", 8) == 0) {
+            snprintf(row, sizeof(row), "updated: \"%s\"", updated_iso);
+            saw_updated = 1;
+        } else if (status_override != NULL && strncmp(line, "status:", 7) == 0) {
+            snprintf(row, sizeof(row), "status: %s", status_override);
+            saw_status = 1;
+        } else {
+            snprintf(row, sizeof(row), "%s", line);
+        }
+
+        {
+            size_t need = strlen(row) + 2;
+            if (len + need + 64 >= cap) {
+                cap = (cap * 2) + need + 128;
+                out = (char *)realloc(out, cap);
+                if (out == NULL) {
+                    free(copy);
+                    return NULL;
+                }
+            }
+            memcpy(out + len, row, strlen(row));
+            len += strlen(row);
+            out[len++] = '\n';
+            out[len] = '\0';
+        }
+
+        line = strtok(NULL, "\n");
+    }
+
+    if (!saw_status && status_override != NULL) {
+        char row[128];
+        snprintf(row, sizeof(row), "status: %s\n", status_override);
+        if (len + strlen(row) + 1 >= cap) {
+            cap = cap + strlen(row) + 128;
+            out = (char *)realloc(out, cap);
+            if (out == NULL) {
+                free(copy);
+                return NULL;
+            }
+        }
+        memcpy(out + len, row, strlen(row));
+        len += strlen(row);
+        out[len] = '\0';
+    }
+
+    if (!saw_updated) {
+        char row[128];
+        snprintf(row, sizeof(row), "updated: \"%s\"\n", updated_iso);
+        if (len + strlen(row) + 1 >= cap) {
+            cap = cap + strlen(row) + 128;
+            out = (char *)realloc(out, cap);
+            if (out == NULL) {
+                free(copy);
+                return NULL;
+            }
+        }
+        memcpy(out + len, row, strlen(row));
+        len += strlen(row);
+        out[len] = '\0';
+    }
+
+    free(copy);
+    return out;
+}
+
+static char *append_progress_log_line(const char *body, const char *text) {
+    const char *src = body != NULL ? body : "";
+    const char *marker = "## Progress Log";
+    char date[32];
+    size_t cap;
+    char *out;
+
+    if (today_utc(date, sizeof(date)) != 0) {
+        strcpy(date, "1970-01-01");
+    }
+
+    cap = strlen(src) + strlen(text) + 256;
+    out = (char *)malloc(cap);
+    if (out == NULL) {
+        return NULL;
+    }
+
+    strcpy(out, src);
+    if (strstr(out, marker) == NULL) {
+        size_t n = strlen(out);
+        while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r')) {
+            out[--n] = '\0';
+        }
+        strcat(out, "\n\n## Progress Log\n");
+    }
+
+    {
+        size_t n = strlen(out);
+        while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r')) {
+            out[--n] = '\0';
+        }
+    }
+
+    strcat(out, "\n- ");
+    strcat(out, date);
+    strcat(out, ": ");
+    strcat(out, text);
+    strcat(out, "\n");
+    return out;
+}
+
+static int write_ticket_with_sections(const char *path, const char *fm, const char *body) {
+    size_t total = strlen(fm) + strlen(body) + 16;
+    char *content = (char *)malloc(total);
+    int rc;
+    if (content == NULL) {
+        return 1;
+    }
+    snprintf(content, total, "---\n%s---\n\n%s", fm, body);
+    rc = write_text_file(path, content);
+    free(content);
+    return rc;
+}
+
+static int cmd_comment_native(int argc, char **argv) {
+    char repo_root[PATH_MAX];
+    char ticket_path[PATH_MAX];
+    char now_iso[32];
+    char *text = NULL;
+    char *fm = NULL;
+    char *body = NULL;
+    char *new_fm = NULL;
+    char *new_body = NULL;
+    int rc;
+
+    (void)argc;
+    if (!resolve_repo_or_cwd(repo_root, sizeof(repo_root))) {
+        fprintf(stderr, "could not determine working directory\n");
+        return 2;
+    }
+    rc = resolve_ticket_path(repo_root, argv[2], ticket_path, sizeof(ticket_path));
+    if (rc != 0) {
+        return rc;
+    }
+    if (!path_exists(ticket_path)) {
+        fprintf(stderr, "Ticket not found: %s\n", ticket_path);
+        return 2;
+    }
+
+    if (read_all_text(ticket_path, &text) != 0 || text == NULL) {
+        fprintf(stderr, "failed to read ticket: %s\n", ticket_path);
+        return 1;
+    }
+    if (split_ticket_sections(text, &fm, &body) != 0) {
+        free(text);
+        fprintf(stderr, "Missing YAML frontmatter\n");
+        return 2;
+    }
+
+    now_utc_iso(now_iso, sizeof(now_iso));
+    new_fm = build_updated_frontmatter(fm, now_iso, NULL);
+    new_body = append_progress_log_line(body, argv[3]);
+    if (new_fm == NULL || new_body == NULL) {
+        free(text); free(fm); free(body); free(new_fm); free(new_body);
+        return 1;
+    }
+
+    rc = write_ticket_with_sections(ticket_path, new_fm, new_body);
+    free(text); free(fm); free(body); free(new_fm); free(new_body);
+    if (rc != 0) {
+        return 1;
+    }
+    printf("commented on %s\n", argv[2]);
+    return 0;
+}
+
+static int cmd_done_force_native(int argc, char **argv) {
+    char repo_root[PATH_MAX];
+    char ticket_path[PATH_MAX];
+    char now_iso[32];
+    char *text = NULL;
+    char *fm = NULL;
+    char *body = NULL;
+    char *new_fm = NULL;
+    int rc;
+
+    (void)argc;
+    if (!resolve_repo_or_cwd(repo_root, sizeof(repo_root))) {
+        fprintf(stderr, "could not determine working directory\n");
+        return 2;
+    }
+    rc = resolve_ticket_path(repo_root, argv[2], ticket_path, sizeof(ticket_path));
+    if (rc != 0) {
+        return rc;
+    }
+    if (!path_exists(ticket_path)) {
+        fprintf(stderr, "Ticket not found: %s\n", ticket_path);
+        return 2;
+    }
+
+    if (read_all_text(ticket_path, &text) != 0 || text == NULL) {
+        fprintf(stderr, "failed to read ticket: %s\n", ticket_path);
+        return 1;
+    }
+    if (split_ticket_sections(text, &fm, &body) != 0) {
+        free(text);
+        fprintf(stderr, "Missing YAML frontmatter\n");
+        return 2;
+    }
+
+    now_utc_iso(now_iso, sizeof(now_iso));
+    new_fm = build_updated_frontmatter(fm, now_iso, "done");
+    if (new_fm == NULL) {
+        free(text); free(fm); free(body);
+        return 1;
+    }
+
+    rc = write_ticket_with_sections(ticket_path, new_fm, body);
+    free(text); free(fm); free(body); free(new_fm);
+    if (rc != 0) {
+        return 1;
+    }
+
+    printf("done %s\n", argv[2]);
+    return 0;
+}
+
+static int cmd_archive_force_native(int argc, char **argv) {
+    char repo_root[PATH_MAX];
+    char tickets_path[PATH_MAX];
+    char archive_path[PATH_MAX];
+    char src[PATH_MAX];
+    char dst[PATH_MAX];
+    DIR *d;
+    struct dirent *ent;
+    char dependents[2048];
+    int has_dependents = 0;
+
+    (void)argc;
+    if (!resolve_repo_or_cwd(repo_root, sizeof(repo_root))) {
+        fprintf(stderr, "could not determine working directory\n");
+        return 2;
+    }
+    if (!is_valid_ticket_id(argv[2])) {
+        fprintf(stderr, "Invalid ticket id: %s\n", argv[2]);
+        return 2;
+    }
+
+    join_path(tickets_path, sizeof(tickets_path), repo_root, "tickets");
+    join_path(archive_path, sizeof(archive_path), tickets_path, "archive");
+    snprintf(src, sizeof(src), "%s%c%s.md", tickets_path, PATH_SEP, argv[2]);
+    snprintf(dst, sizeof(dst), "%s%c%s.md", archive_path, PATH_SEP, argv[2]);
+
+    if (!path_exists(src)) {
+        fprintf(stderr, "Ticket not found: %s\n", src);
+        return 2;
+    }
+    if (make_dir_if_missing(archive_path) != 0) {
+        return 1;
+    }
+    if (path_exists(dst)) {
+        fprintf(stderr, "Refusing to archive: destination already exists: %s\n", dst);
+        return 2;
+    }
+
+    dependents[0] = '\0';
+    d = opendir(tickets_path);
+    if (d != NULL) {
+        while ((ent = readdir(d)) != NULL) {
+            int n = 0;
+            char idbuf[16];
+            char p[PATH_MAX];
+            char *text = NULL;
+            char *fm = NULL;
+            char *body = NULL;
+            if (!parse_ticket_filename_number(ent->d_name, &n)) {
+                continue;
+            }
+            snprintf(idbuf, sizeof(idbuf), "T-%06d", n);
+            if (strcmp(idbuf, argv[2]) == 0) {
+                continue;
+            }
+            snprintf(p, sizeof(p), "%s%c%s", tickets_path, PATH_SEP, ent->d_name);
+            if (read_all_text(p, &text) != 0 || text == NULL) {
+                continue;
+            }
+            if (split_ticket_sections(text, &fm, &body) == 0) {
+                if (frontmatter_depends_on_id(fm, argv[2])) {
+                    if (has_dependents) {
+                        strncat(dependents, ", ", sizeof(dependents) - strlen(dependents) - 1);
+                    }
+                    strncat(dependents, idbuf, sizeof(dependents) - strlen(dependents) - 1);
+                    has_dependents = 1;
+                }
+            }
+            free(text); free(fm); free(body);
+        }
+        closedir(d);
+    }
+
+    if (has_dependents) {
+        fprintf(
+            stderr,
+            "Warning: force-archiving with active dependents: %s. This can create invalid board state where active tickets depend_on archived tickets.\n",
+            dependents
+        );
+    }
+
+    if (rename(src, dst) != 0) {
+        fprintf(stderr, "failed to archive ticket: %s\n", strerror(errno));
+        return 1;
+    }
+    printf("archived %s -> tickets/archive/%s.md\n", argv[2], argv[2]);
+    return 0;
 }
 
 static int is_valid_ticket_id(const char *id) {
@@ -1393,6 +1864,18 @@ int main(int argc, char **argv) {
 
     if (should_handle_native_show(argc, argv)) {
         return cmd_show_native(argc, argv);
+    }
+
+    if (should_handle_native_comment(argc, argv)) {
+        return cmd_comment_native(argc, argv);
+    }
+
+    if (should_handle_native_done_force(argc, argv)) {
+        return cmd_done_force_native(argc, argv);
+    }
+
+    if (should_handle_native_archive_force(argc, argv)) {
+        return cmd_archive_force_native(argc, argv);
     }
 
     if (should_handle_native_version(argc, argv, &version_json)) {

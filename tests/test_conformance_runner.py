@@ -342,6 +342,32 @@ class ConformanceRunnerTests(unittest.TestCase):
             self.assertIn("id: T-000002", text)
             self.assertIn("title: Native Show Ticket", text)
 
+    def test_c_native_perf_commands_without_python_entrypoint(self) -> None:
+        c_bin = self.get_c_bin()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+
+            env = dict(os.environ)
+            env["MT_PY_ENTRY"] = str(root / "missing-mt.py")
+
+            self.assertEqual(subprocess.run([c_bin, "init"], cwd=str(root), env=env, capture_output=True, text=True).returncode, 0)
+            self.assertEqual(subprocess.run([c_bin, "new", "Perf Native"], cwd=str(root), env=env, capture_output=True, text=True).returncode, 0)
+
+            commented = subprocess.run([c_bin, "comment", "T-000002", "perf-update"], cwd=str(root), env=env, capture_output=True, text=True)
+            self.assertEqual(commented.returncode, 0, msg=f"stdout:\n{commented.stdout}\nstderr:\n{commented.stderr}")
+            self.assertIn("commented on T-000002", commented.stdout + commented.stderr)
+
+            done = subprocess.run([c_bin, "done", "T-000002", "--force"], cwd=str(root), env=env, capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, msg=f"stdout:\n{done.stdout}\nstderr:\n{done.stderr}")
+            self.assertIn("done T-000002", done.stdout + done.stderr)
+
+            archived = subprocess.run([c_bin, "archive", "T-000002", "--force"], cwd=str(root), env=env, capture_output=True, text=True)
+            self.assertEqual(archived.returncode, 0, msg=f"stdout:\n{archived.stdout}\nstderr:\n{archived.stderr}")
+            self.assertIn("archived T-000002 -> tickets/archive/T-000002.md", archived.stdout + archived.stderr)
+            self.assertTrue((root / "tickets" / "archive" / "T-000002.md").exists())
+
     def test_zig_new_uses_template_defaults(self) -> None:
         zig_bin = self.get_zig_bin()
 
