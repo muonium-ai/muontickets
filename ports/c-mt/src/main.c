@@ -269,12 +269,23 @@ static int cmd_version_native(int as_json, int argc, char **argv) {
 
 static int should_handle_native_version(int argc, char **argv, int *as_json) {
     char repo_root[PATH_MAX];
+    char cwd[PATH_MAX];
+    char version_path[PATH_MAX];
 
     if (as_json != NULL) {
         *as_json = 0;
     }
     if (argc <= 1) {
-        return find_repo_root(repo_root, sizeof(repo_root));
+        if (find_repo_root(repo_root, sizeof(repo_root))) {
+            return 1;
+        }
+        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+            join_path(version_path, sizeof(version_path), cwd, "VERSION");
+            if (path_is_file(version_path)) {
+                return 1;
+            }
+        }
+        return 0;
     }
     if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
         return argc == 2;
