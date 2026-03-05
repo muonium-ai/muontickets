@@ -57,21 +57,43 @@ def zig_version_text() -> str:
     return (proc.stdout or proc.stderr or "unknown").strip().splitlines()[0]
 
 
+def summarize_build_error(raw: str) -> str:
+    if not raw:
+        return "unknown build error"
+
+    text = raw.strip()
+    if "stderr:\n" in text:
+        text = text.split("stderr:\n", 1)[1]
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return "unknown build error"
+    return " | ".join(lines[:3])
+
+
 def ensure_binary(label: str, path: Path, make_target: str, warnings: List[str]) -> bool:
     if path.exists():
         return True
-    try:
-        run(["make", "-C", "ports", make_target], cwd=ROOT)
-    except Exception as ex:
-        msg = str(ex)
-        if label == "zig-mt" and "build.zig.zon" in msg and "expected enum literal" in msg:
-            warnings.append(
-                f"{label}: build failed due to Zig/project format mismatch (zig version: {zig_version_text()}). "
-                "Investigate build.zig.zon compatibility."
-            )
-        else:
-            warnings.append(f"{label}: build failed ({ex})")
-        return False
+
+    attempts = 2 if label == "zig-mt" else 1
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            run(["make", "-C", "ports", make_target], cwd=ROOT)
+            break
+        except Exception as ex:
+            last_error = str(ex)
+            if label == "zig-mt" and "build.zig.zon" in last_error and "expected enum literal" in last_error:
+                warnings.append(
+                    f"{label}: build failed due to Zig/project format mismatch (zig version: {zig_version_text()}). "
+                    f"details: {summarize_build_error(last_error)}. Investigate build.zig.zon compatibility."
+                )
+                return False
+            if attempt < attempts:
+                time.sleep(0.5)
+                continue
+            warnings.append(f"{label}: build failed ({summarize_build_error(last_error)})")
+            return False
+
     if not path.exists():
         warnings.append(f"{label}: expected binary missing after build at {path}")
         return False

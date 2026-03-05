@@ -22,4 +22,6 @@ For `c-mt`, the benchmark sets `MT_PYTHON` to the repo virtualenv interpreter (`
 
 When Zig build fails with known `build.zig.zon` parse signatures, the warning includes detected `zig version` to aid triage.
 
+For Zig benchmark builds, the script retries once before skipping and emits a concise 1-3 line error summary (instead of full trace output).
+
 Output is a markdown table with per-phase timings and ops/sec for each implementation.
