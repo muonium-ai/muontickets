@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import statistics
 import subprocess
@@ -13,6 +14,7 @@ from typing import Iterable, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 PY = ROOT / ".venv" / "bin" / "python"
+VENV_PY = str(PY)
 PY_MT = ROOT / "mt.py"
 PORTS_MAKE = ROOT / "ports" / "Makefile"
 RUST_BIN = ROOT / "ports" / "dist" / "rust-mt"
@@ -38,8 +40,8 @@ class ImplResult:
     phase: PhaseResult
 
 
-def run(cmd: List[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+def run(cmd: List[str], cwd: Path, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, env=env)
     if check and proc.returncode != 0:
         raise RuntimeError(
             f"Command failed ({proc.returncode}): {' '.join(shlex.quote(c) for c in cmd)}\\n"
@@ -48,13 +50,27 @@ def run(cmd: List[str], cwd: Path, check: bool = True) -> subprocess.CompletedPr
     return proc
 
 
+def zig_version_text() -> str:
+    proc = subprocess.run(["zig", "version"], cwd=str(ROOT), capture_output=True, text=True)
+    if proc.returncode != 0:
+        return "unknown"
+    return (proc.stdout or proc.stderr or "unknown").strip().splitlines()[0]
+
+
 def ensure_binary(label: str, path: Path, make_target: str, warnings: List[str]) -> bool:
     if path.exists():
         return True
     try:
         run(["make", "-C", "ports", make_target], cwd=ROOT)
     except Exception as ex:
-        warnings.append(f"{label}: build failed ({ex})")
+        msg = str(ex)
+        if label == "zig-mt" and "build.zig.zon" in msg and "expected enum literal" in msg:
+            warnings.append(
+                f"{label}: build failed due to Zig/project format mismatch (zig version: {zig_version_text()}). "
+                "Investigate build.zig.zon compatibility."
+            )
+        else:
+            warnings.append(f"{label}: build failed ({ex})")
         return False
     if not path.exists():
         warnings.append(f"{label}: expected binary missing after build at {path}")
@@ -62,16 +78,18 @@ def ensure_binary(label: str, path: Path, make_target: str, warnings: List[str])
     return True
 
 
-def resolve_impls() -> Tuple[List[Tuple[str, List[str]]], List[str]]:
+def resolve_impls() -> Tuple[List[Tuple[str, List[str], dict[str, str] | None]], List[str]]:
     warnings: List[str] = []
-    impls: List[Tuple[str, List[str]]] = [("python-mt", [str(PY), str(PY_MT)])]
+    impls: List[Tuple[str, List[str], dict[str, str] | None]] = [("python-mt", [str(PY), str(PY_MT)], None)]
 
     if ensure_binary("rust-mt", RUST_BIN, "rust", warnings):
-        impls.append(("rust-mt", [str(RUST_BIN)]))
+        impls.append(("rust-mt", [str(RUST_BIN)], None))
     if ensure_binary("zig-mt", ZIG_BIN, "zig", warnings):
-        impls.append(("zig-mt", [str(ZIG_BIN)]))
+        impls.append(("zig-mt", [str(ZIG_BIN)], None))
     if ensure_binary("c-mt", C_BIN, "c", warnings):
-        impls.append(("c-mt", [str(C_BIN)]))
+        c_env = dict(os.environ)
+        c_env["MT_PYTHON"] = VENV_PY
+        impls.append(("c-mt", [str(C_BIN)], c_env))
 
     return impls, warnings
 
@@ -86,41 +104,41 @@ def build_ids(count: int) -> List[str]:
     return [f"T-{i:06d}" for i in range(2, count + 2)]
 
 
-def bench_impl(name: str, prefix: List[str], count: int, report_db: str) -> ImplResult:
+def bench_impl(name: str, prefix: List[str], count: int, report_db: str, env: dict[str, str] | None = None) -> ImplResult:
     with tempfile.TemporaryDirectory(prefix=f"mt-bench-{name}-") as td:
         wd = Path(td)
         run(["git", "init", "-q"], cwd=wd)
 
-        run([*prefix, "init"], cwd=wd)
+        run([*prefix, "init"], cwd=wd, env=env)
 
         ids = build_ids(count)
 
-        create_s = measure(lambda: create_tickets(prefix, wd, count))
-        update_s = measure(lambda: update_tickets(prefix, wd, ids))
-        archive_s = measure(lambda: archive_tickets(prefix, wd, ids))
-        report_s = measure(lambda: report_board(prefix, wd, report_db))
+        create_s = measure(lambda: create_tickets(prefix, wd, count, env=env))
+        update_s = measure(lambda: update_tickets(prefix, wd, ids, env=env))
+        archive_s = measure(lambda: archive_tickets(prefix, wd, ids, env=env))
+        report_s = measure(lambda: report_board(prefix, wd, report_db, env=env))
 
         return ImplResult(name=name, phase=PhaseResult(create_s, update_s, archive_s, report_s))
 
 
-def create_tickets(prefix: List[str], wd: Path, count: int) -> None:
+def create_tickets(prefix: List[str], wd: Path, count: int, env: dict[str, str] | None = None) -> None:
     for i in range(1, count + 1):
-        run([*prefix, "new", f"Perf ticket {i}"], cwd=wd)
+        run([*prefix, "new", f"Perf ticket {i}"], cwd=wd, env=env)
 
 
-def update_tickets(prefix: List[str], wd: Path, ids: Iterable[str]) -> None:
+def update_tickets(prefix: List[str], wd: Path, ids: Iterable[str], env: dict[str, str] | None = None) -> None:
     for tid in ids:
-        run([*prefix, "comment", tid, "perf-update"], cwd=wd)
+        run([*prefix, "comment", tid, "perf-update"], cwd=wd, env=env)
 
 
-def archive_tickets(prefix: List[str], wd: Path, ids: Iterable[str]) -> None:
+def archive_tickets(prefix: List[str], wd: Path, ids: Iterable[str], env: dict[str, str] | None = None) -> None:
     for tid in ids:
-        run([*prefix, "done", tid, "--force"], cwd=wd)
-        run([*prefix, "archive", tid, "--force"], cwd=wd)
+        run([*prefix, "done", tid, "--force"], cwd=wd, env=env)
+        run([*prefix, "archive", tid, "--force"], cwd=wd, env=env)
 
 
-def report_board(prefix: List[str], wd: Path, report_db: str) -> None:
-    run([*prefix, "report", "--db", report_db, "--search", "Perf", "--limit", "10"], cwd=wd)
+def report_board(prefix: List[str], wd: Path, report_db: str, env: dict[str, str] | None = None) -> None:
+    run([*prefix, "report", "--db", report_db, "--search", "Perf", "--limit", "10"], cwd=wd, env=env)
 
 
 def fmt(seconds: float) -> str:
@@ -181,9 +199,9 @@ def main() -> int:
         print()
 
     results: List[ImplResult] = []
-    for name, prefix in impls:
+    for name, prefix, env in impls:
         print(f"Running benchmark for {name} ...")
-        result = bench_impl(name, prefix, args.count, args.report_db)
+        result = bench_impl(name, prefix, args.count, args.report_db, env=env)
         results.append(result)
 
     print()
