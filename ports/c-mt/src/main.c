@@ -23,6 +23,160 @@
 
 static int path_is_file(const char *path);
 static void join_path(char *dst, size_t dst_size, const char *a, const char *b);
+static int find_in_path(const char *cmd, char *out, size_t out_size);
+static int find_repo_root(char *out, size_t out_size);
+static int dirname_from_path(const char *path, char *out, size_t out_size);
+static int find_repo_root_from_dir(const char *start_dir, char *out, size_t out_size);
+
+static const char *runtime_platform(void) {
+#if defined(_WIN32)
+    return "win32";
+#elif defined(__APPLE__)
+    return "darwin";
+#elif defined(__linux__)
+    return "linux";
+#else
+    return "unknown";
+#endif
+}
+
+static void print_json_escaped(const char *s) {
+    const unsigned char *p = (const unsigned char *)(s != NULL ? s : "");
+    while (*p) {
+        if (*p == '\\' || *p == '"') {
+            putchar('\\');
+            putchar((char)*p);
+        } else if (*p == '\n') {
+            fputs("\\n", stdout);
+        } else if (*p == '\r') {
+            fputs("\\r", stdout);
+        } else if (*p == '\t') {
+            fputs("\\t", stdout);
+        } else {
+            putchar((char)*p);
+        }
+        p++;
+    }
+}
+
+static int read_version_file(const char *repo_root, int *major, int *minor, char *version_text, size_t version_text_size) {
+    char version_path[PATH_MAX];
+    char buf[128];
+    FILE *f;
+    int maj, min;
+    char extra;
+
+    join_path(version_path, sizeof(version_path), repo_root, "VERSION");
+    f = fopen(version_path, "r");
+    if (f == NULL) {
+        fprintf(stderr, "Missing VERSION file at project root: %s\n", version_path);
+        return 2;
+    }
+    if (fgets(buf, sizeof(buf), f) == NULL) {
+        fclose(f);
+        fprintf(stderr, "VERSION must match '<major>.<minor>' (example: 0.1)\n");
+        return 2;
+    }
+    fclose(f);
+
+    if (sscanf(buf, "%d.%d %c", &maj, &min, &extra) != 2) {
+        fprintf(stderr, "VERSION must match '<major>.<minor>' (example: 0.1)\n");
+        return 2;
+    }
+
+    if (major != NULL) {
+        *major = maj;
+    }
+    if (minor != NULL) {
+        *minor = min;
+    }
+    if (version_text != NULL && version_text_size > 0) {
+        snprintf(version_text, version_text_size, "%d.%d", maj, min);
+    }
+    return 0;
+}
+
+static int resolve_repo_root(char *out, size_t out_size, int argc, char **argv) {
+    char exe_dir[PATH_MAX];
+    char exe_abs[PATH_MAX];
+
+    if (find_repo_root(out, out_size)) {
+        return 1;
+    }
+    if (argc > 0 && argv[0] != NULL && argv[0][0] != '\0' && dirname_from_path(argv[0], exe_dir, sizeof(exe_dir)) && find_repo_root_from_dir(exe_dir, out, out_size)) {
+        return 1;
+    }
+    if (argc > 0 && argv[0] != NULL && argv[0][0] != '\0' && find_in_path(argv[0], exe_abs, sizeof(exe_abs)) && dirname_from_path(exe_abs, exe_dir, sizeof(exe_dir)) && find_repo_root_from_dir(exe_dir, out, out_size)) {
+        return 1;
+    }
+    return 0;
+}
+
+static int cmd_version_native(int as_json, int argc, char **argv) {
+    char repo_root[PATH_MAX];
+    char version_text[64];
+    int major = 0;
+    int minor = 0;
+    int rc;
+
+    (void)argc;
+    (void)argv;
+
+    if (!resolve_repo_root(repo_root, sizeof(repo_root), argc, argv)) {
+        if (getcwd(repo_root, sizeof(repo_root)) == NULL) {
+            fprintf(stderr, "could not determine working directory\n");
+            return 2;
+        }
+    }
+
+    rc = read_version_file(repo_root, &major, &minor, version_text, sizeof(version_text));
+    if (rc != 0) {
+        return rc;
+    }
+
+    if (as_json) {
+        fputs("{\"implementation\":\"c-mt\",\"version\":\"", stdout);
+        print_json_escaped(version_text);
+        fputs("\",\"version_major\":", stdout);
+        printf("%d", major);
+        fputs(",\"version_minor\":", stdout);
+        printf("%d", minor);
+        fputs(",\"build_tools\":{\"c_compiler\":\"", stdout);
+        print_json_escaped(__VERSION__);
+        fputs("\"},\"runtime\":{\"platform\":\"", stdout);
+        print_json_escaped(runtime_platform());
+        fputs("\"}}\n", stdout);
+    } else {
+        printf("c-mt %s\n", version_text);
+        printf("c_compiler=%s\n", __VERSION__);
+        printf("platform=%s\n", runtime_platform());
+    }
+    return 0;
+}
+
+static int should_handle_native_version(int argc, char **argv, int *as_json) {
+    if (as_json != NULL) {
+        *as_json = 0;
+    }
+    if (argc <= 1) {
+        return 1;
+    }
+    if (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0) {
+        return argc == 2;
+    }
+    if (strcmp(argv[1], "version") == 0) {
+        if (argc == 2) {
+            return 1;
+        }
+        if (argc == 3 && strcmp(argv[2], "--json") == 0) {
+            if (as_json != NULL) {
+                *as_json = 1;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static int path_exists(const char *path) {
     struct stat st;
@@ -302,19 +456,16 @@ int main(int argc, char **argv) {
 
     char repo_root[PATH_MAX];
     char auto_entry[PATH_MAX];
-    char exe_dir[PATH_MAX];
-    char exe_abs[PATH_MAX];
+    int version_json = 0;
+
+    if (should_handle_native_version(argc, argv, &version_json)) {
+        return cmd_version_native(version_json, argc, argv);
+    }
 
     const char *entry = NULL;
     if (env_entry != NULL && env_entry[0] != '\0') {
         entry = env_entry;
-    } else if (find_repo_root(repo_root, sizeof(repo_root))) {
-        join_path(auto_entry, sizeof(auto_entry), repo_root, "mt.py");
-        entry = auto_entry;
-    } else if (argv[0] != NULL && argv[0][0] != '\0' && dirname_from_path(argv[0], exe_dir, sizeof(exe_dir)) && find_repo_root_from_dir(exe_dir, repo_root, sizeof(repo_root))) {
-        join_path(auto_entry, sizeof(auto_entry), repo_root, "mt.py");
-        entry = auto_entry;
-    } else if (argv[0] != NULL && argv[0][0] != '\0' && find_in_path(argv[0], exe_abs, sizeof(exe_abs)) && dirname_from_path(exe_abs, exe_dir, sizeof(exe_dir)) && find_repo_root_from_dir(exe_dir, repo_root, sizeof(repo_root))) {
+    } else if (resolve_repo_root(repo_root, sizeof(repo_root), argc, argv)) {
         join_path(auto_entry, sizeof(auto_entry), repo_root, "mt.py");
         entry = auto_entry;
     } else {

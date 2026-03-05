@@ -16,8 +16,10 @@ PYTHON = ROOT / ".venv" / "bin" / "python"
 class VersioningTests(unittest.TestCase):
     def _assert_plain_version_output(self, output: str, implementation_label: str) -> None:
         text = output.strip()
+        major, minor = load_repo_version(str(ROOT))
+        expected_version = f"{major}.{minor}"
         self.assertIn(implementation_label, text)
-        self.assertIn("0.9", text)
+        self.assertIn(expected_version, text)
 
     def _get_rust_bin(self) -> str:
         rust_bin = os.environ.get("RUST_MT_BIN", "").strip()
@@ -52,6 +54,23 @@ class VersioningTests(unittest.TestCase):
                 return str(default_bin)
 
         self.skipTest("zig binary not available; set ZIG_MT_BIN or install zig")
+
+    def _get_c_bin(self) -> str:
+        c_bin = os.environ.get("C_MT_BIN", "").strip()
+        if c_bin:
+            return c_bin
+
+        default_bin = ROOT / "ports" / "c-mt" / "build" / "mt-c"
+        if default_bin.exists():
+            return str(default_bin)
+
+        if shutil.which("make"):
+            build = subprocess.run(["make"], cwd=str(ROOT / "ports" / "c-mt"), capture_output=True, text=True)
+            self.assertEqual(build.returncode, 0, msg=f"stdout:\n{build.stdout}\nstderr:\n{build.stderr}")
+            if default_bin.exists():
+                return str(default_bin)
+
+        self.skipTest("c binary not available; set C_MT_BIN or install make + C compiler")
 
     def test_version_file_exists_and_is_parseable(self) -> None:
         major, minor = load_repo_version(str(ROOT))
@@ -130,6 +149,25 @@ class VersioningTests(unittest.TestCase):
             proc = subprocess.run([zig_bin, *args], cwd=str(ROOT), capture_output=True, text=True)
             self.assertEqual(proc.returncode, 0, msg=f"args={args} stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
             self._assert_plain_version_output(proc.stdout + proc.stderr, "zig-mt")
+
+    def test_c_version_json_output(self) -> None:
+        c_bin = self._get_c_bin()
+        proc = subprocess.run([c_bin, "version", "--json"], cwd=str(ROOT), capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload.get("implementation"), "c-mt")
+        self.assertIn("version", payload)
+        self.assertIn("version_major", payload)
+        self.assertIn("version_minor", payload)
+        self.assertIn("build_tools", payload)
+        self.assertIn("c_compiler", payload["build_tools"])
+
+    def test_c_global_version_invocations(self) -> None:
+        c_bin = self._get_c_bin()
+        for args in [[], ["-v"], ["--version"]]:
+            proc = subprocess.run([c_bin, *args], cwd=str(ROOT), capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, msg=f"args={args} stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+            self._assert_plain_version_output(proc.stdout + proc.stderr, "c-mt")
 
 
 if __name__ == "__main__":
