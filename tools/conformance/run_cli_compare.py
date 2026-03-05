@@ -19,10 +19,15 @@ IMPLS = {
     "python-mt": f"{PY} {ROOT / 'mt.py'}",
     "rust-mt": str(ROOT / "ports/dist/rust-mt"),
     "zig-mt": str(ROOT / "ports/dist/zig-mt"),
+    "c-mt": str(ROOT / "ports/dist/c-mt"),
 }
 
 
-if not (ROOT / "ports/dist/rust-mt").exists() or not (ROOT / "ports/dist/zig-mt").exists():
+if (
+    not (ROOT / "ports/dist/rust-mt").exists()
+    or not (ROOT / "ports/dist/zig-mt").exists()
+    or not (ROOT / "ports/dist/c-mt").exists()
+):
     subprocess.run(["make", "-C", "ports", "release"], cwd=ROOT, check=True)
 
 results = {}
@@ -42,19 +47,19 @@ for impl, mt_cmd in IMPLS.items():
     results[impl] = impl_res
 
 print("# Conformance comparison")
-print("| Fixture | python-mt | rust-mt | zig-mt |")
-print("|---|---:|---:|---:|")
+print("| Fixture | python-mt | rust-mt | zig-mt | c-mt |")
+print("|---|---:|---:|---:|---:|")
 for fx in FIXTURES:
     row = [fx]
-    for impl in ("python-mt", "rust-mt", "zig-mt"):
+    for impl in ("python-mt", "rust-mt", "zig-mt", "c-mt"):
         code = results[impl][fx]["code"]
         row.append("PASS" if code == 0 else f"FAIL({code})")
-    print(f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} |")
+    print(f"| {row[0]} | {row[1]} | {row[2]} | {row[3]} | {row[4]} |")
 
 print("\n# Output diff summary (stdout+stderr)")
 for fx in FIXTURES:
     base = (results["python-mt"][fx]["out"] + results["python-mt"][fx]["err"]).replace("\r\n", "\n")
-    for impl in ("rust-mt", "zig-mt"):
+    for impl in ("rust-mt", "zig-mt", "c-mt"):
         other = (results[impl][fx]["out"] + results[impl][fx]["err"]).replace("\r\n", "\n")
         same = base == other
         print(f"- {fx}: python vs {impl}: {'IDENTICAL' if same else 'DIFFERENT'}")

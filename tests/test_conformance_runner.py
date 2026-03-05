@@ -16,6 +16,28 @@ FIXTURES = ROOT / "tests" / "conformance" / "fixtures"
 
 
 class ConformanceRunnerTests(unittest.TestCase):
+    def get_c_bin(self) -> str:
+        c_bin = os.environ.get("C_MT_BIN", "").strip()
+        if c_bin:
+            return c_bin
+
+        default_bin = ROOT / "ports" / "c-mt" / "build" / "mt-c"
+        if default_bin.exists():
+            return str(default_bin)
+
+        if shutil.which("make"):
+            build = subprocess.run(
+                ["make"],
+                cwd=str(ROOT / "ports" / "c-mt"),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(build.returncode, 0, msg=f"stdout:\n{build.stdout}\nstderr:\n{build.stderr}")
+            if default_bin.exists():
+                return str(default_bin)
+
+        self.skipTest("c binary not available; set C_MT_BIN or install make + C compiler")
+
     def get_rust_bin(self) -> str:
         rust_bin = os.environ.get("RUST_MT_BIN", "").strip()
         if rust_bin:
@@ -169,6 +191,41 @@ class ConformanceRunnerTests(unittest.TestCase):
         rust_bin = self.get_rust_bin()
 
         proc = self.run_fixture_with_cmd("queue_allocate_fail.json", rust_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_c_core_workflow_fixture(self) -> None:
+        c_bin = self.get_c_bin()
+
+        proc = self.run_fixture_with_cmd("core_workflow.json", c_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_c_reporting_graph_pick_fixture(self) -> None:
+        c_bin = self.get_c_bin()
+
+        proc = self.run_fixture_with_cmd("reporting_graph_pick.json", c_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_c_options_parity_fixture(self) -> None:
+        c_bin = self.get_c_bin()
+
+        proc = self.run_fixture_with_cmd("options_parity.json", c_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_c_pick_scoring_fixture(self) -> None:
+        c_bin = self.get_c_bin()
+
+        proc = self.run_fixture_with_cmd("pick_scoring.json", c_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_c_queue_allocate_fail_fixture(self) -> None:
+        c_bin = self.get_c_bin()
+
+        proc = self.run_fixture_with_cmd("queue_allocate_fail.json", c_bin)
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
