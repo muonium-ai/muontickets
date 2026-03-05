@@ -229,6 +229,30 @@ class ConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
+    def test_c_native_init_bootstrap_and_state_sync(self) -> None:
+        c_bin = self.get_c_bin()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+
+            init_first = subprocess.run([c_bin, "init"], cwd=str(root), capture_output=True, text=True)
+            self.assertEqual(init_first.returncode, 0, msg=f"stdout:\n{init_first.stdout}\nstderr:\n{init_first.stderr}")
+            out1 = init_first.stdout + init_first.stderr
+            self.assertIn("created", out1)
+            self.assertTrue((root / "tickets" / "ticket.template").exists())
+            self.assertTrue((root / "tickets" / "T-000001.md").exists())
+            self.assertIn("T-000001", (root / "tickets" / "last_ticket_id").read_text(encoding="utf-8"))
+
+            archive = root / "tickets" / "archive"
+            archive.mkdir(parents=True, exist_ok=True)
+            (archive / "T-000123.md").write_text("---\nid: T-000123\n---\n", encoding="utf-8")
+
+            init_second = subprocess.run([c_bin, "init"], cwd=str(root), capture_output=True, text=True)
+            self.assertEqual(init_second.returncode, 0, msg=f"stdout:\n{init_second.stdout}\nstderr:\n{init_second.stderr}")
+            self.assertIn("updated", init_second.stdout + init_second.stderr)
+            self.assertIn("T-000123", (root / "tickets" / "last_ticket_id").read_text(encoding="utf-8"))
+
     def test_zig_new_uses_template_defaults(self) -> None:
         zig_bin = self.get_zig_bin()
 
