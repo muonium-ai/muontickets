@@ -431,6 +431,11 @@ def now_utc_iso() -> str:
     return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
 def parse_utc_iso(ts: Any) -> Optional[_dt.datetime]:
+    if isinstance(ts, _dt.datetime):
+        parsed = ts
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+        return parsed
     if not isinstance(ts, str) or not ts.strip():
         return None
     t = ts.strip()
@@ -871,6 +876,51 @@ def cmd_done(args: argparse.Namespace) -> int:
     print(f"done {args.id}")
     return 0
 
+def _is_active_status(status: Any) -> bool:
+    return isinstance(status, str) and status in DEFAULT_STATES and status != "done"
+
+def _collect_active_dependents(repo: str, ticket_id: str) -> List[str]:
+    dependents: List[str] = []
+    for candidate in load_all_tickets(repo):
+        cmeta = candidate.meta
+        if "_parse_error" in cmeta:
+            continue
+        cmeta = normalize_meta(cmeta)
+        cid = cmeta.get("id")
+        if cid == ticket_id:
+            continue
+        if not _is_active_status(cmeta.get("status")):
+            continue
+        deps = cmeta.get("depends_on") or []
+        if ticket_id in deps:
+            dependents.append(str(cid))
+    return sorted(dependents)
+
+def _compute_archive_safe_leaf_set(repo: str, exclude_id: Optional[str] = None) -> List[str]:
+    done_ids: List[str] = []
+    active_dep_targets: set[str] = set()
+
+    for candidate in load_all_tickets(repo):
+        cmeta = candidate.meta
+        if "_parse_error" in cmeta:
+            continue
+        cmeta = normalize_meta(cmeta)
+        cid = cmeta.get("id")
+        if not isinstance(cid, str):
+            continue
+        if exclude_id and cid == exclude_id:
+            continue
+
+        if cmeta.get("status") == "done":
+            done_ids.append(cid)
+
+        if _is_active_status(cmeta.get("status")):
+            for dep in cmeta.get("depends_on") or []:
+                if isinstance(dep, str):
+                    active_dep_targets.add(dep)
+
+    return sorted([tid for tid in done_ids if tid not in active_dep_targets])
+
 def cmd_archive(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     t = find_ticket_by_id(repo, args.id)
@@ -880,30 +930,31 @@ def cmd_archive(args: argparse.Namespace) -> int:
         eprint(f"Refusing to archive: status is {meta.get('status')!r} (expected 'done'). Use --force to override.")
         return 2
 
-    dependents: List[str] = []
-    for candidate in load_all_tickets(repo):
-        cmeta = candidate.meta
-        if "_parse_error" in cmeta:
-            continue
-        cmeta = normalize_meta(cmeta)
-        cid = cmeta.get("id")
-        if cid == args.id:
-            continue
-        deps = cmeta.get("depends_on") or []
-        if args.id in deps:
-            dependents.append(str(cid))
+    dependents = _collect_active_dependents(repo, args.id)
 
     if dependents and not args.force:
-        dep_list = ", ".join(sorted(dependents))
+        dep_list = ", ".join(dependents)
+        safe_leaf_set = _compute_archive_safe_leaf_set(repo, exclude_id=args.id)
         eprint(
             "Refusing to archive: active tickets depend on this ticket: "
             f"{dep_list}. Resolve/update their depends_on first. "
             "Warning: using --force can leave invalid active references to archived tickets."
         )
+        if safe_leaf_set:
+            eprint(
+                "archive-safe leaf set (done tickets with no active dependents): "
+                + ", ".join(safe_leaf_set)
+            )
+            eprint("You can archive these now:")
+            for tid in safe_leaf_set:
+                eprint(f"  mt archive {tid}")
+        else:
+            eprint("No completed tickets are currently archive-safe.")
+            eprint("Hint: run mt graph to inspect dependency structure.")
         return 2
 
     if dependents and args.force:
-        dep_list = ", ".join(sorted(dependents))
+        dep_list = ", ".join(dependents)
         eprint(
             "Warning: force-archiving with active dependents: "
             f"{dep_list}. This can create invalid board state where active tickets depend_on archived tickets."

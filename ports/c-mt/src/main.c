@@ -1901,10 +1901,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (should_handle_native_show(argc, argv)) {
-        return cmd_show_native(argc, argv);
-    }
-
     if (should_handle_native_comment(argc, argv)) {
         return cmd_comment_native(argc, argv);
     }
@@ -1936,6 +1932,9 @@ int main(int argc, char **argv) {
     }
 
     if (!path_exists(entry)) {
+        if (should_handle_native_show(argc, argv)) {
+            return cmd_show_native(argc, argv);
+        }
         fprintf(stderr,
                 "could not locate mt.py entrypoint (looked for '%s'). Set MT_PY_ENTRY explicitly.\n",
                 entry);

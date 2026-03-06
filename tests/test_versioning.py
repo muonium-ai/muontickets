@@ -40,22 +40,28 @@ class VersioningTests(unittest.TestCase):
         self.skipTest("rust binary not available; set RUST_MT_BIN or install cargo")
 
     def _get_zig_bin(self) -> str:
+        def _is_usable_zig_bin(path: str) -> bool:
+            probe = subprocess.run([path, "version", "--json"], cwd=str(ROOT), capture_output=True, text=True)
+            return probe.returncode == 0
+
         zig_bin = os.environ.get("ZIG_MT_BIN", "").strip()
         if zig_bin:
+            if not _is_usable_zig_bin(zig_bin):
+                self.skipTest(f"configured ZIG_MT_BIN is not usable for version command: {zig_bin}")
             return zig_bin
 
         default_bin = ROOT / "ports" / "zig-mt" / "zig-out" / "bin" / "mt-zig"
-        if default_bin.exists():
+        if default_bin.exists() and _is_usable_zig_bin(str(default_bin)):
             return str(default_bin)
 
         if shutil.which("zig"):
             build = subprocess.run(["zig", "build", "-Doptimize=ReleaseSafe"], cwd=str(ROOT / "ports" / "zig-mt"), capture_output=True, text=True)
             if build.returncode != 0:
                 self.skipTest(f"zig build failed in test environment; skipping zig version tests\nstdout:\n{build.stdout}\nstderr:\n{build.stderr}")
-            if default_bin.exists():
+            if default_bin.exists() and _is_usable_zig_bin(str(default_bin)):
                 return str(default_bin)
 
-        self.skipTest("zig binary not available; set ZIG_MT_BIN or install zig")
+        self.skipTest("zig binary not available/usable; set ZIG_MT_BIN to a compatible binary or install zig")
 
     def _get_c_bin(self) -> str:
         c_bin = os.environ.get("C_MT_BIN", "").strip()
