@@ -30,7 +30,7 @@ jobs:
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
-          version: 0.12.0
+          version: 0.15.2
 
       - name: Install sqlite3 (Windows)
         if: runner.os == 'Windows'
