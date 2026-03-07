@@ -138,7 +138,14 @@ fn dirExists(path: []const u8) bool {
 fn printStdout(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
     const message = try std.fmt.allocPrint(allocator, fmt, args);
     defer allocator.free(message);
-    try std.io.getStdOut().writeAll(message);
+    try std.fs.File.stdout().writeAll(message);
+}
+
+fn writeFileText(path: []const u8, data: []const u8) !void {
+    try std.fs.cwd().writeFile(.{
+        .sub_path = path,
+        .data = data,
+    });
 }
 
 fn isTicketId(id: []const u8) bool {
@@ -207,7 +214,7 @@ fn writeLastTicketNumber(allocator: std.mem.Allocator, repo: []const u8, number:
     defer allocator.free(path);
     const text = try std.fmt.allocPrint(allocator, "T-{d:0>6}\n", .{number});
     defer allocator.free(text);
-    try std.fs.cwd().writeFile(path, text);
+    try writeFileText(path, text);
 }
 
 fn scanMaxTicketNumber(allocator: std.mem.Allocator, repo: []const u8) !u32 {
@@ -289,7 +296,7 @@ fn writeTicketFile(allocator: std.mem.Allocator, path: []const u8, id: []const u
         .{ id, title, status, priority, ticket_type, effort, labels, today, today, body },
     );
     defer allocator.free(text);
-    try std.fs.cwd().writeFile(path, text);
+    try writeFileText(path, text);
 }
 
 fn cmdInit(allocator: std.mem.Allocator) !void {
@@ -309,7 +316,7 @@ fn cmdInit(allocator: std.mem.Allocator) !void {
     const template_path = try std.fs.path.join(allocator, &[_][]const u8{ tickets_dir, "ticket.template" });
     defer allocator.free(template_path);
     if (!fileExists(template_path)) {
-        try std.fs.cwd().writeFile(template_path, default_template);
+        try writeFileText(template_path, default_template);
         try printStdout(allocator, "created {s}\n", .{template_path});
     }
 
@@ -355,11 +362,11 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     var owner: []const u8 = "null";
     var branch: []const u8 = "null";
     var goal: []const u8 = "";
-    var labels = try std.ArrayList([]u8).initCapacity(allocator, 4);
+    var labels = try std.array_list.Managed([]u8).initCapacity(allocator, 4);
     defer freeListItems(allocator, &labels);
-    var tags = try std.ArrayList([]u8).initCapacity(allocator, 4);
+    var tags = try std.array_list.Managed([]u8).initCapacity(allocator, 4);
     defer freeListItems(allocator, &tags);
-    var depends_on = try std.ArrayList([]u8).initCapacity(allocator, 4);
+    var depends_on = try std.array_list.Managed([]u8).initCapacity(allocator, 4);
     defer freeListItems(allocator, &depends_on);
 
     var i: usize = 1;
@@ -584,7 +591,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(with_created);
     const with_updated = try setMetaField(allocator, with_created, "updated", today);
     defer allocator.free(with_updated);
-    try std.fs.cwd().writeFile(ticket_path, with_updated);
+    try writeFileText(ticket_path, with_updated);
 
     try printStdout(allocator, "{s}\n", .{ticket_path});
 }
@@ -670,7 +677,7 @@ fn isIsoDateString(v: []const u8) bool {
 
 fn bodyExcerptFirstLines(allocator: std.mem.Allocator, body: []const u8, max_lines: usize) ![]u8 {
     const trimmed = std.mem.trim(u8, body, " \t\r\n");
-    var out = try std.ArrayList(u8).initCapacity(allocator, @min(trimmed.len, 1024));
+    var out = try std.array_list.Managed(u8).initCapacity(allocator, @min(trimmed.len, 1024));
     errdefer out.deinit();
 
     var it = std.mem.splitScalar(u8, trimmed, '\n');
@@ -688,7 +695,7 @@ fn listJsonFromRaw(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     var vals = try listItems(allocator, raw);
     defer freeListItems(allocator, &vals);
 
-    var out = try std.ArrayList(u8).initCapacity(allocator, raw.len + 8);
+    var out = try std.array_list.Managed(u8).initCapacity(allocator, raw.len + 8);
     errdefer out.deinit();
     try out.append('[');
     for (vals.items, 0..) |v, idx| {
@@ -699,7 +706,7 @@ fn listJsonFromRaw(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     return out.toOwnedSlice();
 }
 
-fn appendJsonString(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+fn appendJsonString(allocator: std.mem.Allocator, out: *std.array_list.Managed(u8), value: []const u8) !void {
     try out.append('"');
     for (value) |ch| {
         switch (ch) {
@@ -734,8 +741,8 @@ fn parseListContains(content: []const u8, key: []const u8, target: []const u8) b
     return false;
 }
 
-fn listItems(allocator: std.mem.Allocator, raw_list: []const u8) !std.ArrayList([]u8) {
-    var out = try std.ArrayList([]u8).initCapacity(allocator, 8);
+fn listItems(allocator: std.mem.Allocator, raw_list: []const u8) !std.array_list.Managed([]u8) {
+    var out = try std.array_list.Managed([]u8).initCapacity(allocator, 8);
     const trimmed = std.mem.trim(u8, raw_list, " \t\r[]");
     if (trimmed.len == 0) return out;
     var it = std.mem.splitScalar(u8, trimmed, ',');
@@ -747,13 +754,13 @@ fn listItems(allocator: std.mem.Allocator, raw_list: []const u8) !std.ArrayList(
     return out;
 }
 
-fn freeListItems(allocator: std.mem.Allocator, items: *std.ArrayList([]u8)) void {
+fn freeListItems(allocator: std.mem.Allocator, items: *std.array_list.Managed([]u8)) void {
     for (items.items) |v| allocator.free(v);
     items.deinit();
 }
 
 fn setMetaField(allocator: std.mem.Allocator, content: []const u8, key: []const u8, value: []const u8) ![]u8 {
-    var out = try std.ArrayList(u8).initCapacity(allocator, content.len + 64);
+    var out = try std.array_list.Managed(u8).initCapacity(allocator, content.len + 64);
     errdefer out.deinit();
 
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -987,7 +994,7 @@ fn appendIncident(allocator: std.mem.Allocator, repo: []const u8, message: []con
     const incidents_path = try std.fs.path.join(allocator, &[_][]const u8{ tickets_dir, "incidents.log" });
     defer allocator.free(incidents_path);
 
-    var out = std.ArrayList(u8).init(allocator);
+    var out = std.array_list.Managed(u8).init(allocator);
     defer out.deinit();
     if (fileExists(incidents_path)) {
         const existing = try std.fs.cwd().readFileAlloc(allocator, incidents_path, 1024 * 1024);
@@ -998,7 +1005,7 @@ fn appendIncident(allocator: std.mem.Allocator, repo: []const u8, message: []con
     const now_iso = try nowUtcIsoTimestamp(allocator);
     defer allocator.free(now_iso);
     try out.writer().print("{s} {s}\n", .{ now_iso, message });
-    try std.fs.cwd().writeFile(incidents_path, out.items);
+    try writeFileText(incidents_path, out.items);
 }
 
 fn computePickScore(repo: []const u8, allocator: std.mem.Allocator, content: []const u8, ignore_deps: bool) f64 {
@@ -1032,7 +1039,7 @@ fn computePickScore(repo: []const u8, allocator: std.mem.Allocator, content: []c
 }
 
 fn listLiteral(allocator: std.mem.Allocator, items: []const []const u8) ![]u8 {
-    var out = try std.ArrayList(u8).initCapacity(allocator, 32 + (items.len * 16));
+    var out = try std.array_list.Managed(u8).initCapacity(allocator, 32 + (items.len * 16));
     errdefer out.deinit();
     try out.append('[');
     for (items, 0..) |item, idx| {
@@ -1063,7 +1070,7 @@ fn transitionAllowed(old: []const u8, new: []const u8) bool {
 }
 
 fn defaultBranch(allocator: std.mem.Allocator, id: []const u8, title: []const u8) ![]u8 {
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 64);
+    var buf = try std.array_list.Managed(u8).initCapacity(allocator, 64);
     defer buf.deinit();
     for (title) |ch| {
         const lower_ch = std.ascii.toLower(ch);
@@ -1167,7 +1174,7 @@ fn cmdClaim(allocator: std.mem.Allocator, id: []const u8, owner: []const u8, bra
     defer allocator.free(branch);
     const next3 = try setMetaField(allocator, next2, "branch", branch);
     defer allocator.free(next3);
-    try std.fs.cwd().writeFile(path, next3);
+    try writeFileText(path, next3);
     try printStdout(allocator, "claimed {s} as {s} (branch: {s})\n", .{ id, owner, branch });
 }
 
@@ -1213,7 +1220,7 @@ fn cmdSetStatus(allocator: std.mem.Allocator, id: []const u8, new_status: []cons
     } else try allocator.dupe(u8, next);
     defer allocator.free(final_text);
 
-    try std.fs.cwd().writeFile(path, final_text);
+    try writeFileText(path, final_text);
     try printStdout(allocator, "{s}: {s} -> {s}\n", .{ id, old, new_status });
 }
 
@@ -1238,7 +1245,7 @@ fn cmdDone(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
     }
     const next = try setMetaField(allocator, content, "status", "done");
     defer allocator.free(next);
-    try std.fs.cwd().writeFile(path, next);
+    try writeFileText(path, next);
     try printStdout(allocator, "done {s}\n", .{id});
 }
 
@@ -1267,7 +1274,7 @@ fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
 
     const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
     defer allocator.free(tdir);
-    var dependents = try std.ArrayList([]const u8).initCapacity(allocator, 8);
+    var dependents = try std.array_list.Managed([]const u8).initCapacity(allocator, 8);
     defer {
         for (dependents.items) |dep| allocator.free(dep);
         dependents.deinit();
@@ -1337,7 +1344,7 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         return;
     }
 
-    var errors = try std.ArrayList([]u8).initCapacity(allocator, 16);
+    var errors = try std.array_list.Managed([]u8).initCapacity(allocator, 16);
     defer {
         for (errors.items) |e| allocator.free(e);
         errors.deinit();
@@ -1384,7 +1391,7 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             var deps = try listItems(allocator, deps_raw);
             defer freeListItems(allocator, &deps);
             if (deps.items.len > 0) {
-                var missing = try std.ArrayList(u8).initCapacity(allocator, 32);
+                var missing = try std.array_list.Managed(u8).initCapacity(allocator, 32);
                 defer missing.deinit();
                 var first = true;
                 for (deps.items) |dep| {
@@ -1559,7 +1566,7 @@ fn cmdComment(allocator: std.mem.Allocator, id: []const u8, text: []const u8) !v
     };
     defer allocator.free(content);
 
-    var out = try std.ArrayList(u8).initCapacity(allocator, content.len + text.len + 128);
+    var out = try std.array_list.Managed(u8).initCapacity(allocator, content.len + text.len + 128);
     defer out.deinit();
     try out.appendSlice(content);
     if (!std.mem.containsAtLeast(u8, content, 1, "## Progress Log")) {
@@ -1570,7 +1577,7 @@ fn cmdComment(allocator: std.mem.Allocator, id: []const u8, text: []const u8) !v
     try out.appendSlice(text);
     try out.append('\n');
 
-    try std.fs.cwd().writeFile(path, out.items);
+    try writeFileText(path, out.items);
     std.debug.print("commented on {s}\n", .{id});
 }
 
@@ -1598,9 +1605,9 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         std.process.exit(2);
     };
 
-    var required_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    var required_labels = try std.array_list.Managed([]const u8).initCapacity(allocator, 4);
     defer required_labels.deinit();
-    var avoid_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    var avoid_labels = try std.array_list.Managed([]const u8).initCapacity(allocator, 4);
     defer avoid_labels.deinit();
     var arg_i: usize = 0;
     while (arg_i < cmd_args.len) : (arg_i += 1) {
@@ -1767,7 +1774,7 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(score_text);
     const next4 = try setMetaField(allocator, next3, "score", score_text);
     defer allocator.free(next4);
-    try std.fs.cwd().writeFile(chosen.path, next4);
+    try writeFileText(chosen.path, next4);
 
     if (json_out) {
         try printStdout(allocator, "{{\"picked\":\"{s}\",\"owner\":\"{s}\",\"branch\":\"{s}\",\"score\":{d:.1}}}\n", .{ chosen.id, owner, branch, chosen.score });
@@ -1808,9 +1815,9 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
     };
     if (lease_minutes < 1) lease_minutes = 1;
 
-    var required_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    var required_labels = try std.array_list.Managed([]const u8).initCapacity(allocator, 4);
     defer required_labels.deinit();
-    var avoid_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    var avoid_labels = try std.array_list.Managed([]const u8).initCapacity(allocator, 4);
     defer avoid_labels.deinit();
     var arg_i: usize = 0;
     while (arg_i < cmd_args.len) : (arg_i += 1) {
@@ -2029,7 +2036,7 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
     defer allocator.free(score_text);
     const next9 = try setMetaField(allocator, next8, "score", score_text);
     defer allocator.free(next9);
-    try std.fs.cwd().writeFile(chosen.path, next9);
+    try writeFileText(chosen.path, next9);
 
     if (was_stale_reallocation) {
         const incident = try std.fmt.allocPrint(
@@ -2118,7 +2125,7 @@ fn cmdFailTask(allocator: std.mem.Allocator, id: []const u8, err_text: []const u
         defer allocator.free(blocked5);
         const blocked6 = try setMetaField(allocator, blocked5, "lease_expires_at", "null");
         defer allocator.free(blocked6);
-        try std.fs.cwd().writeFile(path, blocked6);
+        try writeFileText(path, blocked6);
 
         const errors_dir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets", "errors" });
         defer allocator.free(errors_dir);
@@ -2155,7 +2162,7 @@ fn cmdFailTask(allocator: std.mem.Allocator, id: []const u8, err_text: []const u
     defer allocator.free(ready5);
     const ready6 = try setMetaField(allocator, ready5, "lease_expires_at", "null");
     defer allocator.free(ready6);
-    try std.fs.cwd().writeFile(path, ready6);
+    try writeFileText(path, ready6);
     try printStdout(allocator, "{s} re-queued for retry ({d}/{d})\n", .{ id, retry_count, configured_retry_limit });
 }
 
@@ -2254,7 +2261,7 @@ fn cmdExport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         const depends_json = try listJsonFromRaw(allocator, depends_on);
         defer allocator.free(depends_json);
 
-        var line = try std.ArrayList(u8).initCapacity(allocator, 512);
+        var line = try std.array_list.Managed(u8).initCapacity(allocator, 512);
         defer line.deinit();
         try line.append('{');
         try line.appendSlice("\"id\": ");
@@ -2455,7 +2462,7 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         try std.fs.cwd().makePath(parent);
     }
 
-    var rows = try std.ArrayList(ReportRow).initCapacity(allocator, 64);
+    var rows = try std.array_list.Managed(ReportRow).initCapacity(allocator, 64);
     var seen_paths = std.StringHashMap(void).init(allocator);
     defer {
         for (rows.items) |row| {
@@ -2755,7 +2762,7 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         std.process.exit(2);
     }
     const show_invalid = hasFlag(cmd_args, "--show-invalid");
-    var required_labels = try std.ArrayList([]const u8).initCapacity(allocator, 4);
+    var required_labels = try std.array_list.Managed([]const u8).initCapacity(allocator, 4);
     defer required_labels.deinit();
     var label_i: usize = 0;
     while (label_i < cmd_args.len) : (label_i += 1) {

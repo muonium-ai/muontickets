@@ -6,9 +6,11 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "mt-zig",
-        .root_source_file = .{ .path = "src/main.zig" },
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     if (target.result.os.tag == .windows) {
@@ -16,8 +18,8 @@ pub fn build(b: *std.Build) void {
         if (vcpkg_root) |root| {
             const include_path = std.fs.path.join(b.allocator, &[_][]const u8{ root, "installed", "x64-windows", "include" }) catch unreachable;
             const lib_path = std.fs.path.join(b.allocator, &[_][]const u8{ root, "installed", "x64-windows", "lib" }) catch unreachable;
-            exe.addIncludePath(.{ .path = include_path });
-            exe.addLibraryPath(.{ .path = lib_path });
+            exe.addIncludePath(.{ .cwd_relative = include_path });
+            exe.addLibraryPath(.{ .cwd_relative = lib_path });
         }
     }
 
