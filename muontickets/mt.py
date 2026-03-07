@@ -88,12 +88,23 @@ ALLOWED_TRANSITIONS = {
 
 PRIORITY_WEIGHT = {"p0": 300, "p1": 200, "p2": 100}
 EFFORT_WEIGHT = {"xs": 40, "s": 30, "m": 20, "l": 10}
+UTC = getattr(_dt, "UTC", _dt.timezone.utc)
+
+
+def utc_now() -> _dt.datetime:
+    return _dt.datetime.now(UTC)
+
+
+def ensure_utc_aware(value: _dt.datetime) -> _dt.datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 def today_str() -> str:
     return _dt.date.today().isoformat()
 
 def now_compact() -> str:
-    return _dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return utc_now().strftime("%Y%m%dT%H%M%SZ")
 
 def eprint(*args: Any) -> None:
     print(*args, file=sys.stderr)
@@ -428,14 +439,11 @@ def normalize_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
     return meta
 
 def now_utc_iso() -> str:
-    return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 def parse_utc_iso(ts: Any) -> Optional[_dt.datetime]:
     if isinstance(ts, _dt.datetime):
-        parsed = ts
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(_dt.timezone.utc).replace(tzinfo=None)
-        return parsed
+        return ensure_utc_aware(ts)
     if not isinstance(ts, str) or not ts.strip():
         return None
     t = ts.strip()
@@ -445,16 +453,14 @@ def parse_utc_iso(ts: Any) -> Optional[_dt.datetime]:
         parsed = _dt.datetime.fromisoformat(t)
     except Exception:
         return None
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(_dt.timezone.utc).replace(tzinfo=None)
-    return parsed
+    return ensure_utc_aware(parsed)
 
 def lease_expired(meta: Dict[str, Any], now: Optional[_dt.datetime] = None) -> bool:
     lease_raw = meta.get("lease_expires_at")
     lease_dt = parse_utc_iso(lease_raw)
     if lease_dt is None:
         return False
-    check_now = now or _dt.datetime.utcnow()
+    check_now = ensure_utc_aware(now) if now is not None else utc_now()
     return check_now >= lease_dt
 
 def append_incident(repo_root: str, message: str) -> None:
@@ -587,7 +593,7 @@ def compute_score(meta: Dict[str, Any], id_to_meta: Dict[str, Dict[str, Any]]) -
     if created_dt is None:
         age_days = 0
     else:
-        age_days = (_dt.datetime.utcnow() - created_dt).days
+        age_days = (utc_now() - created_dt).days
 
     # If deps not satisfied, make it unpickable (score very low)
     ok, _ = deps_satisfied(meta, id_to_meta)
@@ -1320,7 +1326,7 @@ def cmd_allocate_task(args: argparse.Namespace) -> int:
         id_to_meta[m.get("id")] = m
 
     claimed_count = 0
-    now = _dt.datetime.utcnow()
+    now = utc_now()
     for m in id_to_meta.values():
         if m.get("status") == "claimed" and (m.get("owner") or "") == args.owner:
             if not lease_expired(m, now=now):
