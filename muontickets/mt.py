@@ -305,7 +305,12 @@ def iter_ticket_files_recursive(root_dir: str) -> List[str]:
     if not os.path.isdir(root_dir):
         return []
     out: List[str] = []
-    for root, _dirs, files in os.walk(root_dir):
+    for root, dirs, files in os.walk(root_dir, topdown=True):
+        dirs[:] = [
+            dirname
+            for dirname in dirs
+            if not os.path.exists(os.path.join(root, dirname, ".git"))
+        ]
         for name in files:
             if TICKET_FILE_RE.match(name):
                 out.append(os.path.join(root, name))

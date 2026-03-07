@@ -103,6 +103,24 @@ class QueueAllocationTests(unittest.TestCase):
             self.assertEqual(no_candidate.returncode, 3)
             self.assertIn("no allocatable tickets found", no_candidate.stderr)
 
+    def test_new_ignores_nested_git_submodule_ticket_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workdir = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(workdir), check=True)
+
+            self.assertEqual(self.run_cli(workdir, "init").returncode, 0)
+
+            nested_repo = workdir / "tickets" / "mt" / "muontickets"
+            (nested_repo / "tickets").mkdir(parents=True, exist_ok=True)
+            (nested_repo / ".git").write_text("gitdir: ../../.git/modules/tickets/mt/muontickets\n", encoding="utf-8")
+            (nested_repo / "tickets" / "T-000123.md").write_text("---\nid: T-000123\n---\n", encoding="utf-8")
+
+            created = self.run_cli(workdir, "new", "Parent Repo Ticket")
+            self.assertEqual(created.returncode, 0)
+            self.assertIn("T-000002", created.stdout)
+            self.assertTrue((workdir / "tickets" / "T-000002.md").exists())
+            self.assertEqual("T-000002", (workdir / "tickets" / "last_ticket_id").read_text(encoding="utf-8").strip())
+
 
 if __name__ == "__main__":
     unittest.main()
