@@ -104,15 +104,49 @@ install_precommit_hook() {
   say "Installed pre-commit hook."
 }
 
+scaffold_pyproject() {
+  local pyproject="pyproject.toml"
+  if [[ -f "$pyproject" ]]; then
+    say "pyproject.toml already exists (leaving as-is)."
+    return 0
+  fi
+
+  cat > "$pyproject" <<'TOML'
+[project]
+name = "my-project"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "pyyaml>=6.0",
+]
+
+[tool.uv]
+package = false
+TOML
+  say "Created minimal pyproject.toml with pyyaml dependency."
+}
+
+auto_uv_setup() {
+  if ! command -v uv >/dev/null 2>&1; then
+    warn "uv not found — skipping automatic venv/sync. Install uv and run: uv venv .venv && uv sync"
+    return 0
+  fi
+
+  if [[ ! -d ".venv" ]]; then
+    say "Creating virtual environment with uv..."
+    uv venv .venv
+  fi
+
+  say "Running uv sync..."
+  uv sync
+}
+
 print_next_steps() {
   cat <<EOF
 
 ✅ MuonTickets installed.
 
 Next steps:
-  0) Create a virtual environment (uv):
-    uv venv .venv
-
   1) Create/initialize ticket board:
     uv run python3 ${MT_REL_PATH} init
 
@@ -265,5 +299,8 @@ else
 fi
 
 install_ticket_template
+
+scaffold_pyproject
+auto_uv_setup
 
 print_next_steps

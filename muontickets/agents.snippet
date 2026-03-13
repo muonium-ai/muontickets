@@ -17,11 +17,12 @@ New project explicit submodule setup:
 
 ```bash
 git init
-git submodule add https://github.com/muonium-ai/muontickets.git tickets/mt/muontickets
-git submodule update --init --recursive
-uv sync
+curl -fsSL https://raw.githubusercontent.com/muonium-ai/muontickets/main/install.sh | bash
 uv run python3 tickets/mt/muontickets/muontickets/mt.py init
 ```
+
+The installer creates a minimal `pyproject.toml` (with the `pyyaml` dependency) if
+one does not already exist, then runs `uv venv` + `uv sync` automatically.
 
 ### Ticket states
 
