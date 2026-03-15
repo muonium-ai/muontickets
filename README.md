@@ -249,8 +249,26 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py validate
 MuonTickets includes a built-in maintenance taxonomy of 150 rules across 9 categories (security, deps, code-health, performance, database, infrastructure, observability, testing, docs). The `maintain` command provides a **scan-first, create-later** workflow: verify issues exist before creating tickets that trigger CI/CD cycles.
 
 Reference taxonomy: [docs/muonium_autonomous_maintenance_rules.md](docs/muonium_autonomous_maintenance_rules.md).
+External tools setup: [docs/maintenance_tools_setup.md](docs/maintenance_tools_setup.md).
 
-Three subcommands: `list`, `scan`, `create`.
+Subcommands: `init-config`, `doctor`, `list`, `scan`, `create`.
+
+### Setup (`mt maintain init-config` / `doctor`)
+
+```bash
+# Generate default config (all tools disabled)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain init-config
+
+# Auto-detect project stack and pre-enable matching tools
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain init-config --detect
+
+# Verify all enabled tools are installed and on PATH
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain doctor
+```
+
+`init-config --detect` scans for `pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, `Dockerfile`, etc. and generates a `tickets/maintain.yaml` with the right tools pre-enabled for your stack.
+
+`doctor` checks that every tool enabled in `maintain.yaml` is reachable on `$PATH`, reporting `[OK]` or `[MISS]` per tool.
 
 ### Browse the taxonomy (`mt maintain list`)
 
@@ -267,28 +285,45 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain list --rule 2 -
 
 ### Scan for issues (`mt maintain scan`)
 
-Scan the codebase against maintenance rules. Reports PASS/FAIL/SKIP per rule. **No tickets created.**
+Scan the codebase against maintenance rules. Reports PASS/FAIL/SKIP per rule. **No tickets created.** Invokes both built-in scanners and external tools configured in `tickets/maintain.yaml`.
 
 ```bash
 # Scan security rules
 uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --category security
+
+# Scan all categories at once
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --all
+
+# Use a profile preset (ci: security+code-health+testing, nightly: all)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --profile ci
 
 # Scan specific rules
 uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --rule 2 --rule 42 --rule 48
 
 # JSON output for agent/LLM consumption
 uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --category code-health --format json
+
+# Show only new findings since last scan
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --all --diff
+
+# Auto-fix issues where tools support it (e.g. cargo fmt, black)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --category code-health --fix
 ```
 
-Built-in scanners detect: exposed secrets, hardcoded passwords, .env tracked in git, large files (>1000 lines), excessive TODOs, container running as root, broken doc links, stale README. Rules without built-in scanners report SKIP (use external tools like `npm audit`, CVE databases, or LLM agents).
+Built-in scanners detect: exposed secrets, hardcoded passwords, .env tracked in git, large files (>1000 lines), excessive TODOs, container running as root, broken doc links, stale README. Rules without built-in scanners use configured external tools from `maintain.yaml`, or report SKIP if unconfigured.
+
+Exit codes: `0` = all pass, `1` = findings detected, `2` = config/argument error.
 
 ### Create tickets for verified issues (`mt maintain create`)
 
-Scans first, then creates tickets **only for rules with findings**. Rules that pass scanning are skipped.
+Scans first, then creates tickets **only for rules with findings**. Rules that pass scanning are skipped. Ticket bodies include actual findings (file paths, line numbers) so fixing agents have full context.
 
 ```bash
 # Scan + create tickets for failures and suggestions
 uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --category security
+
+# Create for all categories
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --all
 
 # Preview without creating
 uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --category docs --dry-run
@@ -300,31 +335,60 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --catego
 uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --category testing --skip-scan
 ```
 
+### Configuration (`tickets/maintain.yaml`)
+
+External tools are configured in `tickets/maintain.yaml`. Each tool can have:
+- `enabled: true/false` — whether to invoke during scan
+- `command:` — the shell command to run (`{repo}` is replaced with repo root)
+- `timeout:` — per-tool timeout in seconds (overrides the global `settings.timeout`)
+- `fix_command:` — auto-fix command used with `mt maintain scan --fix`
+
 ### Deduplication
 
 Running `mt maintain create` multiple times is safe. Each ticket is tagged `maint-rule-{id}`. Rules with existing open tickets are skipped.
 
+### Scan profiles
+
+| Profile | Categories | Use case |
+|---------|-----------|----------|
+| `ci` | security, code-health, testing | Fast checks for CI pipelines |
+| `nightly` | all 9 categories | Comprehensive nightly scans |
+
+### Scan diffing
+
+`--diff` compares the current scan against `tickets/maintain.last.json` and shows only new findings. This is stored automatically after each scan.
+
 ### Agent maintenance loop
 
 ```bash
-# 1) Scan for issues (CI cron or lightweight agent)
-uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --category security --category deps
+# 1) Setup: generate config matching your stack
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain init-config --detect
 
-# 2) Create tickets only for verified failures
-uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --category security --category deps
+# 2) Verify tools are installed
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain doctor
 
-# 3) Agents pick up maintenance work
+# 3) Scan for issues (CI cron or lightweight agent)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --all --format json
+
+# 4) Create tickets only for verified failures
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --all
+
+# 5) Agents pick up maintenance work
 uv run python3 tickets/mt/muontickets/muontickets/mt.py pick --owner agent-maint-1 --label auto-maintenance
 
-# 4) After fix + merge
+# 6) After fix + merge
 uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000042
+
+# 7) Next scan shows only new findings (dedup + diff)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --all --diff
 ```
 
 Generated tickets carry:
 - Label: `auto-maintenance` (filterable via `mt ls --label auto-maintenance`)
 - Tags: `maint-rule-{id}`, `maint-cat-{category}`
 - Title prefix: `[MAINT-NNN]`
-- Body includes actual findings when scanner detected the issue
+- Body includes actual findings (file paths, line numbers) when scanner detected the issue
+- Logging: all tool invocations are logged to `tickets/maintain.log`
 
 ## Reporting (SQLite)
 

@@ -247,26 +247,35 @@ This ensures `main` always works.
 across 150 rules in 9 categories (security, deps, code-health, performance, database,
 infrastructure, observability, testing, docs).
 
-Three subcommands:
+Five subcommands:
 
+-   `mt maintain init-config` -- generate `tickets/maintain.yaml` config (`--detect` auto-detects stack)
+-   `mt maintain doctor` -- verify all configured tools are installed on PATH
 -   `mt maintain list` -- browse the 150-rule taxonomy
 -   `mt maintain scan` -- scan codebase against rules, report PASS/FAIL/SKIP (no tickets created)
 -   `mt maintain create` -- create tickets only for rules with verified findings
 
 This enables the autonomous maintenance loop:
 
-    scan → verify issue exists → generate MuonTicket → assign agent → fix → PR → CI verify → merge
+    init-config → doctor → scan → verify issue exists → generate MuonTicket → assign agent → fix → PR → CI verify → merge
 
 Key properties:
 
 -   Scan-first: verify issues exist before creating tickets (avoids wasted CI/CD cycles)
 -   Built-in scanners: exposed secrets, large files, TODO density, .env tracking, broken links, stale README
--   External extensible: rules without scanners report SKIP for external tools (CVE DBs, `npm audit`)
+-   External tools: configured in `tickets/maintain.yaml` with per-tool timeout and auto-fix support
+-   Stack detection: `--detect` generates config matching Python, Node, Rust, Go, Docker stacks
+-   Scan profiles: `--profile ci` (fast checks) and `--profile nightly` (full scan)
+-   Scan diffing: `--diff` shows only new findings vs last scan (`tickets/maintain.last.json`)
+-   Auto-fix: `--fix` runs `fix_command` for tools that support automatic remediation
 -   Lightweight: scan step can run on smaller/cheaper LLM agents or cron jobs
 -   Idempotent: repeated `create` runs skip rules with existing open tickets (tag-based dedup)
--   Filterable: `--category`, `--rule`, `--priority`, `--owner` flags
+-   Filterable: `--category`, `--rule`, `--all`, `--profile`, `--priority`, `--owner` flags
+-   Logging: all tool invocations logged to `tickets/maintain.log`
+-   Exit codes: 0 = pass, 1 = findings, 2 = config/argument error
 
 Reference: [docs/muonium_autonomous_maintenance_rules.md](docs/muonium_autonomous_maintenance_rules.md)
+External tools setup: [docs/maintenance_tools_setup.md](docs/maintenance_tools_setup.md)
 
 Future roadmap:
 

@@ -282,7 +282,25 @@ systems**.
 
 ## Using `mt maintain`
 
-All 150 rules are encoded in the CLI. Three subcommands: `list`, `scan`, `create`.
+All 150 rules are encoded in the CLI. Five subcommands: `init-config`, `doctor`, `list`, `scan`, `create`.
+
+### `mt maintain init-config` -- setup
+
+```bash
+mt maintain init-config                       # generate default config (all tools disabled)
+mt maintain init-config --detect              # auto-detect stack and pre-enable tools
+mt maintain init-config --detect --force      # overwrite existing config
+```
+
+`--detect` scans for `pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, `Dockerfile` and generates `tickets/maintain.yaml` with tools pre-enabled for the detected stack.
+
+### `mt maintain doctor` -- verify tools
+
+```bash
+mt maintain doctor                            # check all enabled tools are on PATH
+```
+
+Reports `[OK]` or `[MISS]` per tool. Run before scanning to catch missing tools early.
 
 ### `mt maintain list` -- browse rules
 
@@ -294,22 +312,30 @@ mt maintain list --rule 2 --rule 48           # specific rules
 
 ### `mt maintain scan` -- verify issues exist
 
-Scan the codebase against rules. Reports PASS/FAIL/SKIP per rule. No tickets created.
+Scan the codebase against rules. Reports PASS/FAIL/SKIP per rule. No tickets created. Invokes both built-in scanners and external tools configured in `tickets/maintain.yaml`.
 
 ```bash
 mt maintain scan --category security          # scan security rules
+mt maintain scan --all                        # scan all 150 rules
+mt maintain scan --profile ci                 # preset: security+code-health+testing
+mt maintain scan --profile nightly            # preset: all categories
 mt maintain scan --rule 2 --rule 42 --rule 48 # specific rules
 mt maintain scan --category code-health --format json  # JSON for agent consumption
+mt maintain scan --all --diff                 # show only new findings since last scan
+mt maintain scan --category code-health --fix # auto-fix where tools support it
 ```
 
-Built-in scanners: exposed secrets (rules 2, 6), container-as-root (15), .env tracking (18), large files (42), TODO density (48), broken doc links (142), stale README (148). Rules without scanners report SKIP.
+Built-in scanners: exposed secrets (rules 2, 6), container-as-root (15), .env tracking (18), large files (42), TODO density (48), broken doc links (142), stale README (148). External tools from `maintain.yaml` are invoked for configured rules. Unconfigured rules without built-in scanners report SKIP.
+
+Exit codes: `0` = all pass, `1` = findings detected, `2` = config/argument error.
 
 ### `mt maintain create` -- create tickets for verified issues
 
-Scans first, creates tickets only for rules with findings. Rules that pass scanning are skipped.
+Scans first, creates tickets only for rules with findings. Rules that pass scanning are skipped. Ticket bodies include file paths, line numbers, and tool output.
 
 ```bash
 mt maintain create --category security                # scan + create for failures
+mt maintain create --all                              # all categories
 mt maintain create --category docs --dry-run          # preview
 mt maintain create --rule 1 --rule 2 --priority p0    # specific rules
 mt maintain create --category testing --skip-scan     # create without scanning (suggestion tickets)
@@ -330,27 +356,53 @@ mt maintain create --category deps --owner agent-maint  # pre-assign
 | `testing` | 131-140 | Flaky tests, coverage, CI pipeline |
 | `docs` | 141-150 | API docs, README, changelog |
 
+### Scan profiles
+
+| Profile | Categories | Use case |
+|---------|-----------|----------|
+| `ci` | security, code-health, testing | Fast CI pipeline checks |
+| `nightly` | all 9 categories | Comprehensive nightly scans |
+
+### Configuration (`tickets/maintain.yaml`)
+
+Each tool entry in `maintain.yaml` supports:
+- `enabled: true/false` — whether to invoke during scan
+- `command:` — shell command (`{repo}` replaced with repo root)
+- `timeout:` — per-tool timeout in seconds (overrides global `settings.timeout`)
+- `fix_command:` — auto-fix command for `--fix` flag (e.g. `cargo fmt`, `black {repo}`)
+
+Tool invocations are logged to `tickets/maintain.log`. See [maintenance_tools_setup.md](maintenance_tools_setup.md) for install guides and starter configs.
+
 ### Deduplication
 
 Each ticket is tagged `maint-rule-{id}`. Repeated `create` runs skip rules with existing open tickets.
 
+### Scan diffing
+
+`--diff` compares against `tickets/maintain.last.json` and shows only new findings. The last scan is saved automatically after each run.
+
 ### Agent workflow
 
 ```bash
-# 1) Scan for issues (lightweight agent or cron job)
-mt maintain scan --category security --category deps --format json
+# 1) One-time setup
+mt maintain init-config --detect
+mt maintain doctor
 
-# 2) Create tickets only for verified failures
-mt maintain create --category security --category deps
+# 2) Scan for issues (lightweight agent or cron job)
+mt maintain scan --all --format json
 
-# 3) Agents claim maintenance work
+# 3) Create tickets only for verified failures
+mt maintain create --all
+
+# 4) Agents claim maintenance work
 mt pick --owner agent-maint-1 --label auto-maintenance
 
-# 4) Agent reads findings from ticket body, implements fix
+# 5) Agent reads findings from ticket body, implements fix
 
-# 5) After merge
+# 6) After merge
 mt done T-NNNNNN
 
-# 6) Next run scans again, creates only new tickets (dedup)
-mt maintain create --category security --category deps
+# 7) Next scan shows only new findings (dedup + diff)
+mt maintain scan --all --diff
+mt maintain create --all
 ```

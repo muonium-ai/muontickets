@@ -5,18 +5,59 @@ This guide covers installing and configuring external tools used by `mt maintain
 ## Quick Start
 
 ```bash
-# 1) Generate the default config file
+# 1) Auto-detect your project stack and generate config
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain init-config --detect
+
+# Or generate a blank config (all tools disabled) for manual setup
 uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain init-config
 
-# 2) Edit tickets/maintain.yaml to enable tools you have installed
+# 2) Verify all enabled tools are installed
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain doctor
+
+# 3) Edit tickets/maintain.yaml to adjust tools as needed
 $EDITOR tickets/maintain.yaml
 
-# 3) Scan with external tools enabled
-uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --category security
+# 4) Scan with external tools enabled
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --all
 
-# 4) Review scan log
+# Or use a profile preset
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --profile ci
+
+# 5) Review scan log
 cat tickets/maintain.log
+
+# 6) On subsequent runs, show only new findings
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --all --diff
 ```
+
+### Stack Auto-Detection
+
+`mt maintain init-config --detect` inspects your repo for project files and generates a config with matching tools pre-enabled:
+
+| Detected File | Stack | Tools Enabled |
+|--------------|-------|---------------|
+| `pyproject.toml` / `setup.py` / `requirements.txt` | Python | pip-audit, pylint, black, mypy, pytest, coverage |
+| `package.json` | Node.js | npm audit, eslint, prettier, depcheck, nyc |
+| `Cargo.toml` | Rust | cargo audit, cargo outdated, cargo fmt, cargo test |
+| `go.mod` | Go | govulncheck, go test |
+| `Dockerfile` | Docker | trivy container scan |
+| `main.tf` | Terraform | terraform plan drift detection |
+
+### Pre-Flight Check (`mt maintain doctor`)
+
+Before scanning, run `doctor` to verify all enabled tools are installed:
+
+```bash
+$ uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain doctor
+[OK]    cve_scanner          pip-audit -> /usr/local/bin/pip-audit
+[OK]    secret_scanner       gitleaks -> /usr/local/bin/gitleaks
+[MISS]  linter               pylint -- not found on PATH
+[OK]    formatter_check      black -> /usr/local/bin/black
+
+4 tool(s) checked: 3 available, 1 missing
+```
+
+Install missing tools before scanning to avoid mid-scan failures.
 
 ## Configuration File (`tickets/maintain.yaml`)
 
@@ -35,6 +76,9 @@ settings:
 # Per-category tool configuration
 # Set enabled: true and provide the command for your stack.
 # Use {repo} as placeholder for the repository root path.
+# Optional per-tool fields:
+#   timeout: 120          # per-tool timeout in seconds (overrides global)
+#   fix_command: ...      # auto-fix command (used with mt maintain scan --fix)
 
 security:
   cve_scanner:
@@ -254,9 +298,16 @@ documentation:
 
 ## Recommended Starter Configs
 
+These can be generated automatically with `mt maintain init-config --detect`.
+
 ### Python project
 
 ```yaml
+settings:
+  log_file: tickets/maintain.log
+  timeout: 60
+  enabled: true
+
 security:
   cve_scanner:
     enabled: true
@@ -268,6 +319,7 @@ deps:
   outdated_check:
     enabled: true
     command: pip list --outdated --format=json
+    timeout: 120  # fetches from PyPI, may be slow
   license_check:
     enabled: true
     command: pip-licenses --format=json
@@ -278,6 +330,7 @@ code_health:
   formatter_check:
     enabled: true
     command: black --check {repo} --quiet
+    fix_command: black {repo}
   type_check:
     enabled: true
     command: mypy {repo} --no-error-summary
@@ -290,6 +343,11 @@ testing:
 ### Node.js project
 
 ```yaml
+settings:
+  log_file: tickets/maintain.log
+  timeout: 60
+  enabled: true
+
 security:
   cve_scanner:
     enabled: true
@@ -298,6 +356,7 @@ deps:
   outdated_check:
     enabled: true
     command: npm outdated --json
+    timeout: 120
   license_check:
     enabled: true
     command: license-checker --json
@@ -308,9 +367,11 @@ code_health:
   linter:
     enabled: true
     command: eslint src --format=json
+    fix_command: eslint src --fix
   formatter_check:
     enabled: true
     command: prettier --check 'src/**/*.{ts,tsx,js}'
+    fix_command: prettier --write 'src/**/*.{ts,tsx,js}'
 testing:
   test_runner:
     enabled: true
@@ -323,6 +384,11 @@ testing:
 ### Rust project
 
 ```yaml
+settings:
+  log_file: tickets/maintain.log
+  timeout: 60
+  enabled: true
+
 security:
   cve_scanner:
     enabled: true
@@ -331,13 +397,19 @@ deps:
   outdated_check:
     enabled: true
     command: cargo outdated --format=json
+    timeout: 180  # fetches crate registry
   unused_deps:
     enabled: true
     command: cargo-udeps --output json
 code_health:
+  linter:
+    enabled: true
+    command: cargo clippy --message-format=json
+    fix_command: cargo clippy --fix --allow-dirty
   formatter_check:
     enabled: true
     command: cargo fmt --check
+    fix_command: cargo fmt
 testing:
   test_runner:
     enabled: true
@@ -363,6 +435,51 @@ The log file is append-only and can be used for:
 - Debugging tool failures
 - Compliance reporting
 
+## Scan Profiles
+
+Use `--profile` for preset category groupings:
+
+| Profile | Categories | Use case |
+|---------|-----------|----------|
+| `ci` | security, code-health, testing | Fast checks in CI pipelines |
+| `nightly` | all 9 categories | Comprehensive nightly/weekly scans |
+
+```bash
+# CI pipeline: fast checks only
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --profile ci
+
+# Nightly: full scan
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --profile nightly
+```
+
+## Scan Diffing
+
+Use `--diff` to show only new findings compared to the last scan. Previous results are stored in `tickets/maintain.last.json` automatically.
+
+```bash
+# First scan (establishes baseline)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --all
+
+# Subsequent scans show only new findings
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --all --diff
+```
+
+## Auto-Fix
+
+Tools that support automatic remediation can declare a `fix_command` in `maintain.yaml`. Use `--fix` to run them:
+
+```bash
+# Check and auto-fix formatting issues
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --category code-health --fix
+```
+
+The fix command only runs for rules that **failed** the scan. Common `fix_command` examples:
+- `black {repo}` (Python formatting)
+- `cargo fmt` (Rust formatting)
+- `cargo clippy --fix --allow-dirty` (Rust linting)
+- `eslint src --fix` (JavaScript linting)
+- `prettier --write 'src/**/*.{ts,tsx,js}'` (JavaScript formatting)
+
 ## Agent Integration
 
 ### Lightweight maintenance agent (cron)
@@ -373,13 +490,15 @@ The log file is append-only and can be used for:
 cd /path/to/project
 git pull
 
-# Scan all categories with configured tools
+# Verify tools are available
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain doctor
+
+# Scan all categories with configured tools (show only new findings)
 uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan \
-  --category security --category deps --format json > /tmp/scan-results.json
+  --all --diff --format json > /tmp/scan-results.json
 
 # Create tickets only for verified failures
-uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create \
-  --category security --category deps
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --all
 
 # Commit and push new tickets
 git add tickets/
@@ -395,12 +514,12 @@ task: preventive-maintenance
 schedule: weekly
 agent_model: haiku  # use smaller model for cost efficiency
 steps:
-  - run: mt maintain scan --category security --category deps --format json
+  - run: mt maintain doctor
+    on_failure: notify
+  - run: mt maintain scan --all --diff --format json
     save_as: scan_results
   - condition: scan_results contains "fail"
-    run: mt maintain create --category security --category deps
-  - run: mt maintain scan --category code-health --format json
-    save_as: code_results
-  - condition: code_results contains "fail"
-    run: mt maintain create --category code-health
+    run: mt maintain create --all
+  - run: mt maintain scan --profile ci --fix
+    save_as: fix_results
 ```
