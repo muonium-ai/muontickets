@@ -77,7 +77,7 @@ class MaintainScanTests(unittest.TestCase):
         workdir = self._init_repo()
         r = self.run_cli(workdir, "maintain", "scan")
         self.assertEqual(r.returncode, 2)
-        self.assertIn("--category or --rule required", r.stderr)
+        self.assertIn("required for scanning", r.stderr)
 
     def test_scan_pass_result(self) -> None:
         workdir = self._init_repo()
@@ -171,7 +171,7 @@ class MaintainCreateTests(unittest.TestCase):
         workdir = self._init_repo()
         r = self.run_cli(workdir, "maintain", "create")
         self.assertEqual(r.returncode, 2)
-        self.assertIn("--category or --rule required", r.stderr)
+        self.assertIn("required", r.stderr)
 
     def test_create_skips_passing_scan(self) -> None:
         workdir = self._init_repo()
@@ -374,6 +374,102 @@ class MaintainConfigTests(unittest.TestCase):
         self.assertIn("[PASS]", r.stdout)
         log_path = workdir / "tickets" / "maintain.log"
         self.assertFalse(log_path.exists())
+
+    def test_scan_all_flag(self) -> None:
+        workdir = self._init_repo()
+        r = self.run_cli(workdir, "maintain", "scan", "--all")
+        # Should scan all 150 rules without error
+        self.assertIn("rule(s) scanned", r.stderr)
+        self.assertIn("150", r.stderr)
+
+    def test_scan_profile_ci(self) -> None:
+        workdir = self._init_repo()
+        r = self.run_cli(workdir, "maintain", "scan", "--profile", "ci")
+        self.assertIn("rule(s) scanned", r.stderr)
+        # ci profile = security + code-health + testing = 20+20+10 = 50
+        self.assertIn("50", r.stderr)
+
+    def test_scan_profile_nightly(self) -> None:
+        workdir = self._init_repo()
+        r = self.run_cli(workdir, "maintain", "scan", "--profile", "nightly")
+        self.assertIn("150", r.stderr)
+
+    def test_scan_diff_no_previous(self) -> None:
+        workdir = self._init_repo()
+        # First scan with --diff should show all results (no previous scan)
+        r = self.run_cli(workdir, "maintain", "scan", "--rule", "18", "--diff")
+        self.assertEqual(r.returncode, 0)
+        last_scan = workdir / "tickets" / "maintain.last.json"
+        self.assertTrue(last_scan.exists())
+
+    def test_scan_diff_shows_changes(self) -> None:
+        workdir = self._init_repo()
+        # First scan
+        self.run_cli(workdir, "maintain", "scan", "--rule", "42", "--diff")
+        # Create a large file to introduce a new finding
+        big = workdir / "huge.py"
+        big.write_text("\n".join(f"y = {i}" for i in range(1200)), encoding="utf-8")
+        # Second scan with --diff should show the new finding
+        r = self.run_cli(workdir, "maintain", "scan", "--rule", "42", "--diff")
+        self.assertIn("huge.py", r.stdout)
+
+    def test_doctor_no_config(self) -> None:
+        workdir = self._init_repo()
+        r = self.run_cli(workdir, "maintain", "doctor")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no tickets/maintain.yaml found", r.stderr)
+
+    def test_doctor_no_tools_enabled(self) -> None:
+        workdir = self._init_repo()
+        self.run_cli(workdir, "maintain", "init-config")
+        r = self.run_cli(workdir, "maintain", "doctor")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("no external tools enabled", r.stderr)
+
+    def test_doctor_checks_tool(self) -> None:
+        workdir = self._init_repo()
+        config_path = workdir / "tickets" / "maintain.yaml"
+        # echo is always available
+        config_path.write_text(
+            "settings:\n  timeout: 10\n"
+            "security:\n  cve_scanner:\n    enabled: true\n    command: echo ok\n",
+            encoding="utf-8",
+        )
+        r = self.run_cli(workdir, "maintain", "doctor")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[OK]", r.stdout)
+        self.assertIn("echo", r.stdout)
+
+    def test_init_config_detect(self) -> None:
+        workdir = self._init_repo()
+        # Create a pyproject.toml to trigger Python detection
+        (workdir / "pyproject.toml").write_text("[project]\nname = 'test'\n", encoding="utf-8")
+        r = self.run_cli(workdir, "maintain", "init-config", "--detect")
+        self.assertEqual(r.returncode, 0)
+        config_path = workdir / "tickets" / "maintain.yaml"
+        content = config_path.read_text(encoding="utf-8")
+        self.assertIn("pip-audit", content)
+        self.assertIn("detected stacks: python", r.stderr)
+
+    def test_per_tool_timeout_in_config(self) -> None:
+        workdir = self._init_repo()
+        config_path = workdir / "tickets" / "maintain.yaml"
+        # Configure a tool with a per-tool timeout (short) that will timeout
+        config_path.write_text(
+            "settings:\n  timeout: 60\n  log_file: tickets/maintain.log\n"
+            "security:\n  cve_scanner:\n    enabled: true\n    command: sleep 5\n    timeout: 1\n",
+            encoding="utf-8",
+        )
+        r = self.run_cli(workdir, "maintain", "scan", "--rule", "1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("[FAIL]", r.stdout)
+        self.assertIn("timeout", r.stdout.lower())
+
+    def test_create_all_flag(self) -> None:
+        workdir = self._init_repo()
+        r = self.run_cli(workdir, "maintain", "create", "--all", "--dry-run", "--skip-scan")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("150 ticket(s) would be created", r.stderr)
 
 
 if __name__ == "__main__":
