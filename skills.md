@@ -269,6 +269,85 @@ PY
 uv run python3 tickets/mt/muontickets/muontickets/mt.py archive T-000123
 ```
 
+### Autonomous maintenance
+
+MuonTickets includes a taxonomy of 150 maintenance rules across 9 categories. The `maintain` command provides three subcommands: `list`, `scan`, and `create`. This enables a **scan-first, create-later** workflow -- verify issues exist before creating tickets that trigger CI/CD cycles.
+
+Categories: `security`, `deps`, `code-health`, `performance`, `database`, `infrastructure`, `observability`, `testing`, `docs`.
+
+#### `mt maintain list` -- browse rules
+
+```bash
+# Browse all 150 rules with detection heuristics
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain list
+
+# Filter by category
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain list --category security
+
+# Filter by specific rules
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain list --rule 2 --rule 48
+```
+
+#### `mt maintain scan` -- verify issues exist
+
+Scan the codebase against rules. Reports PASS, FAIL, or SKIP per rule. No tickets created.
+
+```bash
+# Scan security rules
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --category security
+
+# Scan specific rules
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --rule 2 --rule 42 --rule 48
+
+# JSON output for agent/LLM consumption (cheaper models can parse this)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --category code-health --format json
+```
+
+Built-in scanners cover: exposed secrets, hardcoded passwords, .env tracking, large files, TODO density, container-as-root, broken doc links, stale README. Rules without scanners report SKIP -- use external tools or LLM agents for those.
+
+#### `mt maintain create` -- create tickets for verified issues
+
+Scans first, then creates tickets only for rules with findings. Rules that pass are skipped.
+
+```bash
+# Scan + create for failures
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --category security
+
+# Preview without creating
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --category docs --dry-run
+
+# Override priority and pre-assign
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --category deps --priority p0 --owner agent-maint
+
+# Skip scanning -- create suggestion tickets for all rules
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --category testing --skip-scan
+```
+
+### Agent maintenance workflow
+
+Use `mt maintain` in a CI cron job or as a lightweight agent task. The scan step can run on smaller/cheaper LLM models or as a cron job, keeping token costs low.
+
+```bash
+# 1) Scan for issues (lightweight agent or cron)
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain scan --category security --category deps --format json
+
+# 2) Create tickets only for verified failures
+uv run python3 tickets/mt/muontickets/muontickets/mt.py maintain create --category security --category deps
+
+# 3) Pick up maintenance work using the auto-maintenance label
+uv run python3 tickets/mt/muontickets/muontickets/mt.py pick --owner agent-maint-1 --label auto-maintenance
+
+# 4) Agent reads findings from ticket body, implements fix
+
+# 5) Mark done after merge
+uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000042
+
+# 6) List remaining maintenance backlog
+uv run python3 tickets/mt/muontickets/muontickets/mt.py ls --label auto-maintenance --status ready
+```
+
+Deduplication: tickets are tagged `maint-rule-{id}`. Repeated `create` runs skip rules with existing open tickets. Scan results include actual file locations and line numbers, so agents can fix issues without re-scanning.
+
 ## Best Practices for Agents
 
 - CLI-first workflow: do not directly edit ticket files for normal operations; use `mt.py` (`claim`, `set-status`, `comment`, `done`, `archive`) so validation and transition rules are enforced.

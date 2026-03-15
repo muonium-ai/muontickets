@@ -241,6 +241,33 @@ This ensures `main` always works.
 -   Board statistics
 -   Effort-based prioritization
 
+### Autonomous Maintenance
+
+`mt maintain` provides a scan-first, create-later workflow for preventive maintenance
+across 150 rules in 9 categories (security, deps, code-health, performance, database,
+infrastructure, observability, testing, docs).
+
+Three subcommands:
+
+-   `mt maintain list` -- browse the 150-rule taxonomy
+-   `mt maintain scan` -- scan codebase against rules, report PASS/FAIL/SKIP (no tickets created)
+-   `mt maintain create` -- create tickets only for rules with verified findings
+
+This enables the autonomous maintenance loop:
+
+    scan → verify issue exists → generate MuonTicket → assign agent → fix → PR → CI verify → merge
+
+Key properties:
+
+-   Scan-first: verify issues exist before creating tickets (avoids wasted CI/CD cycles)
+-   Built-in scanners: exposed secrets, large files, TODO density, .env tracking, broken links, stale README
+-   External extensible: rules without scanners report SKIP for external tools (CVE DBs, `npm audit`)
+-   Lightweight: scan step can run on smaller/cheaper LLM agents or cron jobs
+-   Idempotent: repeated `create` runs skip rules with existing open tickets (tag-based dedup)
+-   Filterable: `--category`, `--rule`, `--priority`, `--owner` flags
+
+Reference: [docs/muonium_autonomous_maintenance_rules.md](docs/muonium_autonomous_maintenance_rules.md)
+
 Future roadmap:
 
 -   Event-sourced tickets (append-only mode)

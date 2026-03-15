@@ -43,15 +43,17 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import glob as _glob
 import json
 import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 ID_RE = re.compile(r"^T-\d{6}$")
 TICKET_FILE_RE = re.compile(r"^(T-\d{6})\.md$")
@@ -240,6 +242,658 @@ def load_repo_version_text(repo_root: str) -> str:
     # Validate format via shared parser, but preserve optional patch text.
     parse_major_minor_version(text)
     return text
+
+@dataclass
+class MaintenanceRule:
+    id: int
+    title: str
+    category: str
+    detection: str
+    action: str
+    default_priority: str
+    default_type: str
+    default_effort: str
+    labels: List[str]
+    external_tool: str = ""  # external tool/command hint for rules without built-in scanners
+
+MAINTENANCE_CATEGORIES = [
+    "security", "deps", "code-health", "performance",
+    "database", "infrastructure", "observability",
+    "testing", "docs",
+]
+
+MAINTENANCE_RULES: List[MaintenanceRule] = [
+    # Category 1: Security Maintenance (rules 1-20)
+    MaintenanceRule(1, "CVE Dependency Vulnerability", "security",
+        "dependency version < secure version from CVE DB",
+        "upgrade dependency and run tests", "p0", "chore", "m", ["maintenance", "security"]),
+    MaintenanceRule(2, "Exposed Secrets in Repo", "security",
+        "regex patterns (AKIA..., private_key)",
+        "remove secret and move to vault", "p0", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(3, "Expired SSL Certificate", "security",
+        "ssl_expiry_date < now + 14 days",
+        "renew certificate", "p0", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(4, "Missing Security Headers", "security",
+        "missing CSP, X-Frame-Options, X-XSS-Protection",
+        "add headers", "p1", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(5, "Insecure Hashing Algorithm", "security",
+        "md5 or sha1 usage",
+        "migrate to argon2/bcrypt", "p0", "chore", "m", ["maintenance", "security"]),
+    MaintenanceRule(6, "Hardcoded Password", "security",
+        "password=\"...\" pattern",
+        "move to environment variable", "p0", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(7, "Open Debug Ports", "security",
+        "container exposing debug ports (9229, 3000)",
+        "disable in production", "p1", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(8, "Unauthenticated Admin Endpoint", "security",
+        "/admin route without auth middleware",
+        "enforce auth guard", "p0", "chore", "m", ["maintenance", "security"]),
+    MaintenanceRule(9, "Excessive IAM Privileges", "security",
+        "policy contains \"*\"",
+        "restrict permissions", "p1", "chore", "m", ["maintenance", "security"]),
+    MaintenanceRule(10, "Unencrypted DB Connection", "security",
+        "connection string missing TLS flag",
+        "enforce encrypted connections", "p1", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(11, "Weak JWT Secret", "security",
+        "JWT secret length < 32 characters or common value",
+        "rotate to strong secret", "p0", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(12, "Missing Rate Limiting", "security",
+        "API endpoints without rate limit middleware",
+        "add rate limiting", "p1", "chore", "m", ["maintenance", "security"]),
+    MaintenanceRule(13, "Disabled CSRF Protection", "security",
+        "CSRF middleware disabled or missing",
+        "enable CSRF protection", "p1", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(14, "Dependency Signature Mismatch", "security",
+        "package checksum does not match registry",
+        "verify and re-fetch dependency", "p0", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(15, "Container Running as Root", "security",
+        "Dockerfile missing USER directive",
+        "add non-root user", "p1", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(16, "Outdated OpenSSL", "security",
+        "OpenSSL version < latest stable",
+        "upgrade OpenSSL", "p0", "chore", "m", ["maintenance", "security"]),
+    MaintenanceRule(17, "Public Cloud Bucket", "security",
+        "storage bucket with public access enabled",
+        "restrict bucket access", "p0", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(18, "Exposed .env File", "security",
+        ".env file tracked in git or publicly accessible",
+        "remove from tracking and add to .gitignore", "p0", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(19, "Missing MFA for Admin", "security",
+        "admin accounts without MFA enabled",
+        "enforce MFA", "p1", "chore", "s", ["maintenance", "security"]),
+    MaintenanceRule(20, "Suspicious Login Activity", "security",
+        "unusual login patterns or locations",
+        "investigate and rotate credentials", "p0", "chore", "m", ["maintenance", "security"]),
+
+    # Category 2: Dependency Maintenance (rules 21-40)
+    MaintenanceRule(21, "Outdated Dependency", "deps",
+        "npm/pip/cargo outdated",
+        "upgrade version", "p1", "chore", "s", ["maintenance", "deps"]),
+    MaintenanceRule(22, "Deprecated Library", "deps",
+        "upstream marked deprecated",
+        "migrate to replacement", "p1", "chore", "m", ["maintenance", "deps"]),
+    MaintenanceRule(23, "Unmaintained Dependency", "deps",
+        "last commit > 3 years",
+        "replace library", "p1", "chore", "l", ["maintenance", "deps"]),
+    MaintenanceRule(24, "Duplicate Libraries", "deps",
+        "multiple versions installed",
+        "consolidate version", "p1", "chore", "s", ["maintenance", "deps"]),
+    MaintenanceRule(25, "Vulnerable Transitive Dependency", "deps",
+        "nested CVE scan",
+        "update dependency tree", "p0", "chore", "m", ["maintenance", "deps"]),
+    MaintenanceRule(26, "Lockfile Drift", "deps",
+        "mismatch with installed packages",
+        "rebuild lockfile", "p1", "chore", "s", ["maintenance", "deps"]),
+    MaintenanceRule(27, "Outdated Build Toolchain", "deps",
+        "compiler older than LTS",
+        "upgrade toolchain", "p1", "chore", "m", ["maintenance", "deps"]),
+    MaintenanceRule(28, "Runtime EOL", "deps",
+        "runtime end-of-life version",
+        "upgrade runtime", "p0", "chore", "m", ["maintenance", "deps"]),
+    MaintenanceRule(29, "Dependency Size Explosion", "deps",
+        "bundle size threshold exceeded",
+        "audit dependency", "p2", "chore", "m", ["maintenance", "deps"]),
+    MaintenanceRule(30, "Unused Dependency", "deps",
+        "static import analysis",
+        "remove package", "p2", "chore", "s", ["maintenance", "deps"]),
+    MaintenanceRule(31, "License Change Detection", "deps",
+        "dependency license changed in new version",
+        "review license compatibility", "p1", "chore", "s", ["maintenance", "deps"]),
+    MaintenanceRule(32, "Conflicting Version Ranges", "deps",
+        "dependency resolution conflicts",
+        "resolve version conflicts", "p1", "chore", "m", ["maintenance", "deps"]),
+    MaintenanceRule(33, "Unused Peer Dependencies", "deps",
+        "peer dependency declared but unused",
+        "remove peer dependency", "p2", "chore", "s", ["maintenance", "deps"]),
+    MaintenanceRule(34, "Broken Registry References", "deps",
+        "package registry URL unreachable",
+        "fix registry reference", "p1", "chore", "s", ["maintenance", "deps"]),
+    MaintenanceRule(35, "Checksum Mismatch", "deps",
+        "package checksum mismatch on install",
+        "re-fetch and verify package", "p0", "chore", "s", ["maintenance", "deps"]),
+    MaintenanceRule(36, "Incompatible Binary Architecture", "deps",
+        "native module built for wrong arch",
+        "rebuild for target architecture", "p1", "chore", "m", ["maintenance", "deps"]),
+    MaintenanceRule(37, "Outdated WASM Runtime", "deps",
+        "WASM runtime version behind stable",
+        "upgrade WASM runtime", "p2", "chore", "m", ["maintenance", "deps"]),
+    MaintenanceRule(38, "Outdated GPU Drivers", "deps",
+        "GPU driver version behind stable",
+        "upgrade GPU drivers", "p2", "chore", "m", ["maintenance", "deps"]),
+    MaintenanceRule(39, "Mirror Outage Fallback", "deps",
+        "primary package mirror unreachable",
+        "configure fallback mirror", "p1", "chore", "s", ["maintenance", "deps"]),
+    MaintenanceRule(40, "Corrupted Dependency Cache", "deps",
+        "dependency cache integrity check fails",
+        "clear and rebuild cache", "p1", "chore", "s", ["maintenance", "deps"]),
+
+    # Category 3: Code Health (rules 41-60)
+    MaintenanceRule(41, "High Cyclomatic Complexity", "code-health",
+        "cyclomatic complexity > 15",
+        "refactor into smaller functions", "p2", "refactor", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(42, "File Too Large", "code-health",
+        "file > 1000 lines",
+        "split into modules", "p2", "refactor", "l", ["maintenance", "code-health"]),
+    MaintenanceRule(43, "Duplicate Code Blocks", "code-health",
+        "repeated code blocks detected",
+        "extract shared function", "p2", "refactor", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(44, "Dead Code Detection", "code-health",
+        "unreachable or unused code paths",
+        "remove dead code", "p2", "refactor", "s", ["maintenance", "code-health"]),
+    MaintenanceRule(45, "Deprecated API Usage", "code-health",
+        "calls to deprecated functions/methods",
+        "migrate to replacement API", "p1", "refactor", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(46, "Missing Error Handling", "code-health",
+        "unhandled exceptions or missing error checks",
+        "add error handling", "p1", "code", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(47, "Logging Inconsistency", "code-health",
+        "inconsistent log levels or formats",
+        "standardize logging", "p2", "refactor", "s", ["maintenance", "code-health"]),
+    MaintenanceRule(48, "Excessive TODO Comments", "code-health",
+        "TODO/FIXME/HACK count exceeds threshold",
+        "address or create tickets for TODOs", "p2", "chore", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(49, "Long Parameter Lists", "code-health",
+        "function parameters > 6",
+        "refactor to use parameter objects", "p2", "refactor", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(50, "Circular Imports", "code-health",
+        "circular import dependency detected",
+        "restructure module dependencies", "p1", "refactor", "l", ["maintenance", "code-health"]),
+    MaintenanceRule(51, "Missing Type Hints", "code-health",
+        "functions without type annotations",
+        "add type hints", "p2", "refactor", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(52, "Unused Imports", "code-health",
+        "imported modules never referenced",
+        "remove unused imports", "p2", "refactor", "xs", ["maintenance", "code-health"]),
+    MaintenanceRule(53, "Inconsistent Formatting", "code-health",
+        "code style deviates from project standard",
+        "run formatter", "p2", "chore", "xs", ["maintenance", "code-health"]),
+    MaintenanceRule(54, "Poor Naming Patterns", "code-health",
+        "variable/function names unclear or inconsistent",
+        "rename for clarity", "p2", "refactor", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(55, "Missing Docstrings", "code-health",
+        "public functions without documentation",
+        "add docstrings", "p2", "docs", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(56, "Nested Loops", "code-health",
+        "deeply nested loops (> 3 levels)",
+        "refactor to reduce nesting", "p2", "refactor", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(57, "Unsafe Pointer Operations", "code-health",
+        "raw pointer usage without safety checks",
+        "add bounds checking or use safe alternatives", "p1", "code", "m", ["maintenance", "code-health"]),
+    MaintenanceRule(58, "Unbounded Recursion", "code-health",
+        "recursive function without base case limit",
+        "add recursion depth limit", "p1", "code", "s", ["maintenance", "code-health"]),
+    MaintenanceRule(59, "Magic Numbers", "code-health",
+        "unexplained numeric literals in code",
+        "extract to named constants", "p2", "refactor", "s", ["maintenance", "code-health"]),
+    MaintenanceRule(60, "Mutable Global State", "code-health",
+        "global variables modified at runtime",
+        "refactor to local/injected state", "p1", "refactor", "m", ["maintenance", "code-health"]),
+
+    # Category 4: Performance (rules 61-80)
+    MaintenanceRule(61, "Slow Database Query", "performance",
+        "query execution > 500ms",
+        "optimize query or add index", "p1", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(62, "N+1 Query Pattern", "performance",
+        "repeated queries in loop",
+        "batch or join queries", "p1", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(63, "Memory Leak Detection", "performance",
+        "heap growth without release",
+        "fix memory leak", "p0", "code", "l", ["maintenance", "performance"]),
+    MaintenanceRule(64, "High API Latency", "performance",
+        "p95 latency exceeds threshold",
+        "profile and optimize endpoint", "p1", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(65, "Cache Miss Ratio", "performance",
+        "cache miss ratio > 0.6",
+        "tune cache strategy", "p1", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(66, "Large Response Payloads", "performance",
+        "API response size exceeds threshold",
+        "add pagination or compression", "p2", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(67, "O(n^2) Algorithms", "performance",
+        "quadratic complexity in hot paths",
+        "replace with efficient algorithm", "p1", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(68, "Unbounded Job Queue", "performance",
+        "job queue grows without limit",
+        "add backpressure or queue limits", "p1", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(69, "Excessive Logging Overhead", "performance",
+        "high-frequency logging in hot paths",
+        "reduce log verbosity or sample", "p2", "code", "s", ["maintenance", "performance"]),
+    MaintenanceRule(70, "Slow Cold Start", "performance",
+        "service startup > threshold",
+        "optimize initialization", "p2", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(71, "Thread Starvation", "performance",
+        "thread pool exhaustion detected",
+        "increase pool size or reduce blocking", "p1", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(72, "Lock Contention", "performance",
+        "high lock wait times",
+        "reduce critical section scope", "p1", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(73, "Blocking IO in Async Code", "performance",
+        "synchronous IO in async context",
+        "convert to async IO", "p1", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(74, "Oversized Images", "performance",
+        "image assets exceed size threshold",
+        "compress or resize images", "p2", "chore", "s", ["maintenance", "performance"]),
+    MaintenanceRule(75, "Redundant Network Calls", "performance",
+        "duplicate API calls for same data",
+        "deduplicate or cache results", "p2", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(76, "Inefficient Serialization", "performance",
+        "slow serialization format in hot path",
+        "switch to efficient format", "p2", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(77, "Slow WASM Execution Path", "performance",
+        "WASM module performance below threshold",
+        "profile and optimize WASM code", "p2", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(78, "GPU Underutilization", "performance",
+        "GPU compute usage below capacity",
+        "optimize GPU workload distribution", "p2", "code", "l", ["maintenance", "performance"]),
+    MaintenanceRule(79, "Excessive Disk Writes", "performance",
+        "write IOPS exceeds threshold",
+        "batch or buffer writes", "p2", "code", "m", ["maintenance", "performance"]),
+    MaintenanceRule(80, "Poor Pagination", "performance",
+        "unbounded result sets returned",
+        "implement cursor-based pagination", "p1", "code", "m", ["maintenance", "performance"]),
+
+    # Category 5: Database Maintenance (rules 81-100)
+    MaintenanceRule(81, "Missing Index", "database",
+        "frequent query without supporting index",
+        "add database index", "p1", "code", "s", ["maintenance", "database"]),
+    MaintenanceRule(82, "Unused Index", "database",
+        "index with zero reads",
+        "drop unused index", "p2", "chore", "s", ["maintenance", "database"]),
+    MaintenanceRule(83, "Table Bloat", "database",
+        "dead tuple ratio exceeds threshold",
+        "vacuum or repack table", "p1", "chore", "s", ["maintenance", "database"]),
+    MaintenanceRule(84, "Fragmented Index", "database",
+        "index fragmentation > threshold",
+        "rebuild index", "p2", "chore", "s", ["maintenance", "database"]),
+    MaintenanceRule(85, "Orphan Records", "database",
+        "records referencing deleted parents",
+        "clean up orphan records", "p2", "chore", "m", ["maintenance", "database"]),
+    MaintenanceRule(86, "Duplicate Rows", "database",
+        "duplicate records detected",
+        "deduplicate data", "p1", "chore", "m", ["maintenance", "database"]),
+    MaintenanceRule(87, "Data Format Drift", "database",
+        "column data deviates from expected format",
+        "normalize data format", "p2", "chore", "m", ["maintenance", "database"]),
+    MaintenanceRule(88, "Backup Failure", "database",
+        "last backup older than policy threshold",
+        "investigate and fix backup", "p0", "chore", "m", ["maintenance", "database"]),
+    MaintenanceRule(89, "Failed Migration", "database",
+        "migration in failed/partial state",
+        "fix and rerun migration", "p0", "chore", "m", ["maintenance", "database"]),
+    MaintenanceRule(90, "Slow Join Queries", "database",
+        "join query exceeding time threshold",
+        "optimize join or denormalize", "p1", "code", "m", ["maintenance", "database"]),
+    MaintenanceRule(91, "Oversized JSON Columns", "database",
+        "JSON column average size exceeds threshold",
+        "normalize into relational columns", "p2", "refactor", "l", ["maintenance", "database"]),
+    MaintenanceRule(92, "Unused Tables", "database",
+        "tables with no recent reads or writes",
+        "archive or drop unused tables", "p2", "chore", "s", ["maintenance", "database"]),
+    MaintenanceRule(93, "Table Scan Alerts", "database",
+        "full table scan on large table",
+        "add index or optimize query", "p1", "code", "m", ["maintenance", "database"]),
+    MaintenanceRule(94, "Encoding Mismatch", "database",
+        "mixed character encodings across tables",
+        "standardize encoding", "p2", "chore", "m", ["maintenance", "database"]),
+    MaintenanceRule(95, "Unbounded Table Growth", "database",
+        "table row count growing without retention policy",
+        "implement retention or archival", "p1", "chore", "m", ["maintenance", "database"]),
+    MaintenanceRule(96, "Missing Partitioning", "database",
+        "large table without partitioning scheme",
+        "add table partitioning", "p2", "chore", "l", ["maintenance", "database"]),
+    MaintenanceRule(97, "Outdated Statistics", "database",
+        "query planner statistics stale",
+        "analyze/update statistics", "p2", "chore", "s", ["maintenance", "database"]),
+    MaintenanceRule(98, "Corrupted Index Pages", "database",
+        "index corruption detected",
+        "rebuild corrupted index", "p0", "chore", "m", ["maintenance", "database"]),
+    MaintenanceRule(99, "Replication Lag", "database",
+        "replica behind primary by threshold",
+        "investigate replication lag", "p0", "chore", "m", ["maintenance", "database"]),
+    MaintenanceRule(100, "Foreign Key Inconsistencies", "database",
+        "orphaned foreign key references",
+        "fix referential integrity", "p1", "chore", "m", ["maintenance", "database"]),
+
+    # Category 6: Infrastructure (rules 101-120)
+    MaintenanceRule(101, "Container Image Outdated", "infrastructure",
+        "base image version behind latest",
+        "update container base image", "p1", "chore", "m", ["maintenance", "infrastructure"]),
+    MaintenanceRule(102, "Missing OS Security Patches", "infrastructure",
+        "OS packages with available security updates",
+        "apply security patches", "p0", "chore", "m", ["maintenance", "infrastructure"]),
+    MaintenanceRule(103, "Low Disk Space", "infrastructure",
+        "disk usage > 85%",
+        "clean up or expand storage", "p0", "chore", "s", ["maintenance", "infrastructure"]),
+    MaintenanceRule(104, "CPU Saturation", "infrastructure",
+        "sustained CPU usage > 90%",
+        "scale or optimize workload", "p0", "chore", "m", ["maintenance", "infrastructure"]),
+    MaintenanceRule(105, "Memory Pressure", "infrastructure",
+        "memory usage > 90% or OOM events",
+        "investigate memory usage and scale", "p0", "chore", "m", ["maintenance", "infrastructure"]),
+    MaintenanceRule(106, "CrashLoop Pods", "infrastructure",
+        "pod in CrashLoopBackOff state",
+        "diagnose and fix crash loop", "p0", "chore", "m", ["maintenance", "infrastructure"]),
+    MaintenanceRule(107, "Orphan Containers", "infrastructure",
+        "stopped containers consuming resources",
+        "remove orphan containers", "p2", "chore", "s", ["maintenance", "infrastructure"]),
+    MaintenanceRule(108, "Stale Storage Volumes", "infrastructure",
+        "unattached volumes with no recent access",
+        "clean up stale volumes", "p2", "chore", "s", ["maintenance", "infrastructure"]),
+    MaintenanceRule(109, "Expired DNS Records", "infrastructure",
+        "DNS records pointing to decommissioned resources",
+        "update DNS records", "p1", "chore", "s", ["maintenance", "infrastructure"]),
+    MaintenanceRule(110, "Misconfigured Load Balancer", "infrastructure",
+        "health check failures or routing errors",
+        "fix load balancer configuration", "p0", "chore", "m", ["maintenance", "infrastructure"]),
+    MaintenanceRule(111, "High Network Latency", "infrastructure",
+        "inter-service latency exceeds threshold",
+        "investigate network path", "p1", "chore", "m", ["maintenance", "infrastructure"]),
+    MaintenanceRule(112, "Unused Cloud Resources", "infrastructure",
+        "idle VMs, IPs, or load balancers",
+        "decommission unused resources", "p2", "chore", "s", ["maintenance", "infrastructure"]),
+    MaintenanceRule(113, "Broken CI Runners", "infrastructure",
+        "CI runner offline or failing jobs",
+        "repair or replace CI runner", "p0", "chore", "m", ["maintenance", "infrastructure"]),
+    MaintenanceRule(114, "Container Restart Loops", "infrastructure",
+        "container restart count exceeds threshold",
+        "diagnose restart cause", "p0", "chore", "m", ["maintenance", "infrastructure"]),
+    MaintenanceRule(115, "Unused Security Groups", "infrastructure",
+        "security groups not attached to resources",
+        "remove unused security groups", "p2", "chore", "s", ["maintenance", "infrastructure"]),
+    MaintenanceRule(116, "Expired API Gateway Cert", "infrastructure",
+        "API gateway certificate expiring soon",
+        "renew API gateway certificate", "p0", "chore", "s", ["maintenance", "infrastructure"]),
+    MaintenanceRule(117, "Infrastructure Drift", "infrastructure",
+        "live config differs from IaC definitions",
+        "reconcile infrastructure state", "p1", "chore", "m", ["maintenance", "infrastructure"]),
+    MaintenanceRule(118, "Registry Cleanup Required", "infrastructure",
+        "container registry storage exceeds threshold",
+        "prune old images from registry", "p2", "chore", "s", ["maintenance", "infrastructure"]),
+    MaintenanceRule(119, "Log Storage Overflow", "infrastructure",
+        "log volume approaching storage limit",
+        "rotate or archive logs", "p1", "chore", "s", ["maintenance", "infrastructure"]),
+    MaintenanceRule(120, "Node Version Drift", "infrastructure",
+        "cluster nodes running different versions",
+        "align node versions", "p1", "chore", "m", ["maintenance", "infrastructure"]),
+
+    # Category 7: Observability (rules 121-130)
+    MaintenanceRule(121, "Missing Metrics", "observability",
+        "service endpoints without metrics instrumentation",
+        "add metrics collection", "p1", "code", "m", ["maintenance", "observability"]),
+    MaintenanceRule(122, "Broken Alerts", "observability",
+        "alert rules referencing missing metrics",
+        "fix alert configuration", "p1", "chore", "s", ["maintenance", "observability"]),
+    MaintenanceRule(123, "Missing Distributed Tracing", "observability",
+        "services without trace propagation",
+        "add trace instrumentation", "p1", "code", "m", ["maintenance", "observability"]),
+    MaintenanceRule(124, "Log Retention Overflow", "observability",
+        "log retention exceeding storage policy",
+        "adjust retention policy", "p2", "chore", "s", ["maintenance", "observability"]),
+    MaintenanceRule(125, "Missing Uptime Checks", "observability",
+        "production endpoints without health monitoring",
+        "add uptime checks", "p1", "chore", "s", ["maintenance", "observability"]),
+    MaintenanceRule(126, "Alert Fatigue Detection", "observability",
+        "high volume of non-actionable alerts",
+        "tune alert thresholds", "p2", "chore", "m", ["maintenance", "observability"]),
+    MaintenanceRule(127, "Missing Error Classification", "observability",
+        "errors logged without categorization",
+        "add error classification", "p2", "code", "m", ["maintenance", "observability"]),
+    MaintenanceRule(128, "Inconsistent Log Schema", "observability",
+        "log format varies across services",
+        "standardize log schema", "p2", "chore", "m", ["maintenance", "observability"]),
+    MaintenanceRule(129, "Missing Service Map", "observability",
+        "no service dependency map available",
+        "generate service map", "p2", "docs", "m", ["maintenance", "observability"]),
+    MaintenanceRule(130, "Outdated Dashboards", "observability",
+        "dashboards referencing deprecated metrics",
+        "update dashboards", "p2", "chore", "s", ["maintenance", "observability"]),
+
+    # Category 8: Test Maintenance (rules 131-140)
+    MaintenanceRule(131, "Failing Tests", "testing",
+        "test suite has persistent failures",
+        "fix failing tests", "p0", "tests", "m", ["maintenance", "testing"]),
+    MaintenanceRule(132, "Flaky Tests", "testing",
+        "tests with intermittent pass/fail",
+        "stabilize flaky tests", "p1", "tests", "m", ["maintenance", "testing"]),
+    MaintenanceRule(133, "Missing Regression Tests", "testing",
+        "recent bug fixes without regression tests",
+        "add regression tests", "p1", "tests", "m", ["maintenance", "testing"]),
+    MaintenanceRule(134, "Low Coverage Modules", "testing",
+        "modules below coverage threshold",
+        "add tests for low coverage areas", "p2", "tests", "m", ["maintenance", "testing"]),
+    MaintenanceRule(135, "Outdated Snapshot Tests", "testing",
+        "snapshot tests not updated after code changes",
+        "update snapshot tests", "p2", "tests", "s", ["maintenance", "testing"]),
+    MaintenanceRule(136, "Slow Test Suite", "testing",
+        "test suite execution exceeds threshold",
+        "optimize slow tests", "p2", "tests", "m", ["maintenance", "testing"]),
+    MaintenanceRule(137, "Missing Integration Tests", "testing",
+        "critical paths without integration test coverage",
+        "add integration tests", "p1", "tests", "l", ["maintenance", "testing"]),
+    MaintenanceRule(138, "Broken CI Pipeline", "testing",
+        "CI pipeline failing on main branch",
+        "fix CI pipeline", "p0", "tests", "m", ["maintenance", "testing"]),
+    MaintenanceRule(139, "Missing Edge Case Tests", "testing",
+        "boundary conditions untested",
+        "add edge case tests", "p2", "tests", "m", ["maintenance", "testing"]),
+    MaintenanceRule(140, "Inconsistent Test Data", "testing",
+        "test fixtures with hardcoded or stale data",
+        "standardize test data", "p2", "tests", "s", ["maintenance", "testing"]),
+
+    # Category 9: Documentation (rules 141-150)
+    MaintenanceRule(141, "Outdated API Docs", "docs",
+        "API documentation does not match implementation",
+        "update API documentation", "p1", "docs", "m", ["maintenance", "docs"]),
+    MaintenanceRule(142, "Broken Documentation Links", "docs",
+        "dead links in documentation",
+        "fix broken links", "p2", "docs", "s", ["maintenance", "docs"]),
+    MaintenanceRule(143, "Outdated Onboarding Docs", "docs",
+        "onboarding guide references removed features",
+        "update onboarding documentation", "p1", "docs", "m", ["maintenance", "docs"]),
+    MaintenanceRule(144, "Missing Architecture Diagram", "docs",
+        "no architecture diagram or diagram is outdated",
+        "create or update architecture diagram", "p2", "docs", "m", ["maintenance", "docs"]),
+    MaintenanceRule(145, "Missing CLI Examples", "docs",
+        "CLI commands without usage examples",
+        "add CLI usage examples", "p2", "docs", "s", ["maintenance", "docs"]),
+    MaintenanceRule(146, "Outdated Deployment Guide", "docs",
+        "deployment guide does not match current process",
+        "update deployment guide", "p1", "docs", "m", ["maintenance", "docs"]),
+    MaintenanceRule(147, "Undocumented Endpoints", "docs",
+        "API endpoints without documentation",
+        "document undocumented endpoints", "p1", "docs", "m", ["maintenance", "docs"]),
+    MaintenanceRule(148, "Stale README", "docs",
+        "README last updated significantly before repo activity",
+        "update README", "p2", "docs", "s", ["maintenance", "docs"]),
+    MaintenanceRule(149, "Outdated SDK Docs", "docs",
+        "SDK documentation does not match current API",
+        "update SDK documentation", "p1", "docs", "m", ["maintenance", "docs"]),
+    MaintenanceRule(150, "Missing Changelog", "docs",
+        "no changelog or changelog not updated for recent releases",
+        "update changelog", "p2", "docs", "s", ["maintenance", "docs"]),
+]
+
+# External tool hints for rules without built-in scanners.
+# Tells agents what command or data source to use for detection.
+_EXTERNAL_TOOL_HINTS: Dict[int, str] = {
+    # Security
+    1:  "npm audit | pip-audit | cargo audit | osv-scanner | trivy | grype",
+    3:  "openssl s_client -connect host:443 | openssl x509 -noout -dates",
+    4:  "curl -I <url> (check response headers for CSP, X-Frame-Options, X-XSS-Protection)",
+    5:  "grep -rn 'md5\\|sha1\\|MD5\\|SHA1' --include='*.py' --include='*.js' --include='*.go'",
+    7:  "docker inspect <container> | grep -i port; kubectl get svc -o json",
+    8:  "review route definitions for /admin paths without auth middleware",
+    9:  "aws iam list-policies --only-attached | grep '\"*\"'; gcloud iam policies",
+    10: "grep -rn 'sslmode=disable\\|ssl=false\\|useSSL=false' (connection strings)",
+    11: "grep -rn 'jwt.sign\\|JWT_SECRET\\|jwt_secret' and check secret length/entropy",
+    12: "review API framework middleware config for rate-limit setup",
+    13: "review framework config for CSRF middleware (csrf_exempt, disable_csrf)",
+    14: "npm audit signatures | pip hash --verify | cargo verify-project",
+    16: "openssl version; dpkg -l openssl; brew info openssl",
+    17: "aws s3api get-bucket-acl --bucket <name>; gsutil iam get gs://<bucket>",
+    19: "aws iam get-login-profile; review admin user MFA status in cloud console",
+    20: "review auth/access logs for unusual IPs, times, or geolocations",
+    # Dependencies
+    21: "npm outdated | pip list --outdated | cargo outdated | uv pip list --outdated",
+    22: "npm info <pkg> deprecated; check PyPI/crates.io status page",
+    23: "check GitHub last commit date via API; npm info <pkg> time.modified",
+    24: "npm ls --all | grep deduped; pip list | sort | uniq -d",
+    25: "npm audit | pip-audit | cargo audit | osv-scanner (transitive deps)",
+    26: "npm ci --dry-run; pip freeze > /tmp/freeze.txt && diff requirements.txt /tmp/freeze.txt",
+    27: "rustc --version; python3 --version; node --version; go version; zig version",
+    28: "check endoflife.date API for runtime EOL dates (python, node, ruby, etc.)",
+    29: "npm pack --dry-run; du -sh node_modules; cargo bloat",
+    30: "depcheck (npm) | vulture (python) | cargo-udeps (rust)",
+    31: "license-checker (npm) | pip-licenses | cargo-license; diff against previous",
+    32: "npm ls --all 2>&1 | grep 'ERESOLVE\\|peer dep'; pip check",
+    33: "npm ls --all | grep 'peer dep'",
+    34: "npm ping; pip config list (check index-url reachability)",
+    35: "npm cache verify; pip hash --verify; cargo verify-project",
+    36: "file node_modules/**/*.node; check platform/arch in native bindings",
+    37: "check wasmtime/wasmer version against latest stable release",
+    38: "nvidia-smi; check driver version against CUDA compatibility matrix",
+    39: "npm ping --registry <mirror>; pip install --dry-run -i <mirror>",
+    40: "npm cache clean --force; pip cache purge; cargo clean",
+    # Code Health
+    41: "radon cc -a (python) | eslint --rule complexity (js) | gocyclo (go)",
+    43: "jscpd | flay (ruby) | PMD CPD (java); semgrep --config=p/duplicate-code",
+    44: "vulture (python) | ts-prune (typescript) | deadcode (go)",
+    45: "grep -rn '@deprecated\\|DeprecationWarning\\|DEPRECATED'",
+    46: "pylint --disable=all --enable=W0702,W0703 | eslint no-empty-catch",
+    47: "grep -rn 'console.log\\|print(\\|log.Debug' and review log level consistency",
+    49: "pylint --disable=all --enable=R0913 | eslint max-params",
+    50: "python -c 'import importlib; importlib.import_module(\"pkg\")' | madge --circular (js)",
+    51: "mypy --strict | pyright; check function signatures for missing annotations",
+    52: "autoflake --check (python) | eslint no-unused-vars (js)",
+    53: "black --check (python) | prettier --check (js) | rustfmt --check (rust)",
+    54: "pylint naming-convention | eslint camelcase/naming-convention",
+    55: "pydocstyle | darglint | interrogate (python)",
+    56: "review code for nested for/while loops > 3 levels deep",
+    57: "clippy (rust) | cppcheck (c/c++) | review unsafe blocks",
+    58: "review recursive functions for missing base case or depth limit",
+    59: "pylint --disable=all --enable=W0612 | eslint no-magic-numbers",
+    60: "grep -rn 'global ' (python) | review mutable module-level state",
+    # Performance
+    61: "EXPLAIN ANALYZE <query>; pg_stat_statements; slow query log",
+    62: "django-debug-toolbar | bullet gem (rails) | review ORM queries in loops",
+    63: "valgrind --leak-check=full | heaptrack | node --inspect + Chrome DevTools",
+    64: "check APM dashboards (Datadog, New Relic, Grafana) for p95 latency",
+    65: "redis-cli INFO stats | memcached stats; check cache hit/miss metrics",
+    66: "curl -s <api> | wc -c; check API response sizes in APM",
+    67: "review hot-path code for nested loops; profile with py-spy/perf/flamegraph",
+    68: "check job queue metrics (Sidekiq, Celery, Bull) for queue depth trends",
+    69: "review logging in hot paths; check log volume metrics",
+    70: "time service startup; profile with py-spy/perf during init",
+    71: "jstack (java) | py-spy dump | review thread pool configs",
+    72: "lock contention profiling; review mutex/lock usage in hot paths",
+    73: "review async code for sync IO calls (requests, open, subprocess)",
+    74: "find . -name '*.png' -o -name '*.jpg' | xargs identify -format '%f %wx%h %b\\n'",
+    75: "review network calls in code; check for duplicate HTTP requests in APM",
+    76: "benchmark serialization (json vs msgpack vs protobuf) in hot paths",
+    77: "wasm profiling tools; review WASM module execution times",
+    78: "nvidia-smi dmon; review GPU utilization metrics",
+    79: "iostat; check write IOPS metrics; review fsync/flush patterns",
+    80: "review API endpoints for unbounded SELECT/find queries without LIMIT",
+    # Database
+    81: "EXPLAIN ANALYZE <query>; pg_stat_user_tables (seq_scan count); slow query log",
+    82: "pg_stat_user_indexes (idx_scan = 0); MySQL sys.schema_unused_indexes",
+    83: "pg_stat_user_tables (n_dead_tup); VACUUM VERBOSE",
+    84: "pg_stat_user_indexes; DBCC SHOWCONTIG (SQL Server); OPTIMIZE TABLE (MySQL)",
+    85: "SELECT orphans with LEFT JOIN ... WHERE parent.id IS NULL",
+    86: "SELECT columns, COUNT(*) GROUP BY columns HAVING COUNT(*) > 1",
+    87: "sample column data and check format consistency; pg_typeof()",
+    88: "pg_stat_archiver; check backup tool logs (pg_dump, mysqldump, mongodump)",
+    89: "check migration status table; rails db:migrate:status | alembic current",
+    90: "EXPLAIN ANALYZE for JOIN queries; check pg_stat_statements for slow joins",
+    91: "SELECT avg(pg_column_size(json_col)) FROM table; check JSON column sizes",
+    92: "pg_stat_user_tables (last_autovacuum, seq_scan, idx_scan for zero-activity tables)",
+    93: "pg_stat_user_tables (seq_scan on large tables); MySQL slow query log",
+    94: "SELECT table_name, character_set_name FROM information_schema.columns",
+    95: "SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC",
+    96: "check table sizes; review partitioning strategy for tables > 10M rows",
+    97: "pg_stat_user_tables (last_analyze); ANALYZE VERBOSE",
+    98: "pg_catalog.pg_index (indisvalid = false); REINDEX",
+    99: "SELECT * FROM pg_stat_replication; check replica lag metrics",
+    100: "check foreign key constraints; SELECT with LEFT JOIN for orphaned references",
+    # Infrastructure
+    101: "docker pull <image>:latest --dry-run; compare Dockerfile FROM tag to latest",
+    102: "apt list --upgradable | yum check-update | apk version -l '<'",
+    103: "df -h; kubectl top nodes; cloud console storage metrics",
+    104: "top; kubectl top pods; cloud monitoring CPU metrics",
+    105: "free -h; kubectl top pods; check OOM events in dmesg/journal",
+    106: "kubectl get pods --field-selector=status.phase!=Running; kubectl describe pod",
+    107: "docker ps -a --filter status=exited; docker system df",
+    108: "kubectl get pv --no-headers | grep Available; aws ec2 describe-volumes --filters Name=status,Values=available",
+    109: "dig <hostname>; nslookup; check DNS records against active infrastructure",
+    110: "kubectl describe ingress; aws elb describe-target-health; health check logs",
+    111: "ping; traceroute; mtr; check network latency metrics in monitoring",
+    112: "aws ec2 describe-instances --filters Name=instance-state-name,Values=stopped; cloud cost reports",
+    113: "check CI dashboard for offline runners; gitlab-runner verify; gh api /repos/{owner}/{repo}/actions/runners",
+    114: "docker inspect --format='{{.RestartCount}}'; kubectl describe pod (restart count)",
+    115: "aws ec2 describe-security-groups; check for unattached security groups",
+    116: "aws apigateway get-domain-names; check certificate expiry dates",
+    117: "terraform plan | pulumi preview | compare live state vs IaC definitions",
+    118: "docker system df; cloud registry storage metrics; skopeo list-tags",
+    119: "du -sh /var/log; check log rotation config; cloud logging storage metrics",
+    120: "kubectl get nodes -o wide; compare node versions across cluster",
+    # Observability
+    121: "review service endpoints for metrics instrumentation; check Prometheus targets",
+    122: "promtool check rules; review alert rule YAML for missing metric references",
+    123: "review code for trace context propagation (OpenTelemetry, Jaeger, Zipkin)",
+    124: "check log retention policies; du -sh log storage; cloud logging config",
+    125: "review uptime monitoring config (Pingdom, UptimeRobot, cloud health checks)",
+    126: "review alert history for frequency; check PagerDuty/Opsgenie alert volume",
+    127: "review error logging for categorization (error codes, error types)",
+    128: "compare log formats across services; check structured logging config",
+    129: "review service dependencies; generate from traces or config (Kiali, Jaeger)",
+    130: "review Grafana/Datadog dashboards for deprecated metric references",
+    # Testing
+    131: "run test suite and check exit code; review CI pipeline history for failures",
+    132: "run tests multiple times; check CI history for intermittent failures",
+    133: "review recent bug-fix commits for associated test additions",
+    134: "coverage run -m pytest; nyc; go test -cover; review coverage report",
+    135: "jest --updateSnapshot --dry-run; check snapshot diff against code changes",
+    136: "time test suite execution; pytest --durations=10; jest --verbose",
+    137: "review critical user paths for integration test coverage",
+    138: "check CI pipeline status on main branch; review recent CI logs",
+    139: "review test cases for boundary values, null inputs, empty collections",
+    140: "review test fixtures for hardcoded dates, IDs, or stale data",
+    # Documentation
+    141: "diff API implementation against API docs; check OpenAPI spec freshness",
+    143: "review onboarding docs against current setup/install process",
+    144: "check for architecture diagrams in docs/; compare against current system",
+    145: "review CLI --help output against documentation examples",
+    146: "compare deployment docs against current deploy scripts/CI config",
+    147: "list API routes and compare against documented endpoints",
+    149: "diff SDK methods against API documentation; check SDK version alignment",
+    150: "check CHANGELOG.md last entry date vs latest release tag",
+}
+
+MAINTENANCE_RULES_BY_ID = {r.id: r for r in MAINTENANCE_RULES}
+
+# Apply external tool hints to rules
+for _rid, _hint in _EXTERNAL_TOOL_HINTS.items():
+    if _rid in MAINTENANCE_RULES_BY_ID:
+        MAINTENANCE_RULES_BY_ID[_rid].external_tool = _hint
 
 @dataclass
 class Ticket:
@@ -1677,6 +2331,711 @@ def cmd_version(args: argparse.Namespace) -> int:
         print(f"platform={payload['runtime']['platform']}")
     return 0
 
+def _filter_maintenance_rules(
+    categories: List[str], rule_ids: List[int],
+) -> List[MaintenanceRule]:
+    rules = MAINTENANCE_RULES
+    if categories:
+        rules = [r for r in rules if r.category in categories]
+    if rule_ids:
+        rules = [r for r in rules if r.id in rule_ids]
+    return rules
+
+
+# ---------------------------------------------------------------------------
+# Scanner registry: maps rule IDs to scanning functions
+# Scanner signature: (repo_root: str) -> List[Dict] with keys: file, line, detail
+# ---------------------------------------------------------------------------
+MAINTENANCE_SCANNERS: Dict[int, Callable[[str], List[Dict[str, Any]]]] = {}
+
+_SOURCE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".c", ".h",
+    ".cpp", ".java", ".rb", ".sh", ".bash", ".zsh", ".yaml", ".yml",
+    ".toml", ".cfg", ".ini", ".json", ".xml", ".zig",
+}
+
+_BINARY_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv",
+                "target", "zig-out", "zig-cache", "build", "dist", ".tox"}
+_SKIP_SCAN_DIRS = _BINARY_DIRS | {"tests", "test", "spec", "fixtures", "testdata"}
+
+
+def _source_files(repo: str, skip_dirs: Optional[set] = None) -> List[str]:
+    """Walk repo and yield source file paths (relative), skipping specified dirs."""
+    exclude = skip_dirs if skip_dirs is not None else _BINARY_DIRS
+    results: List[str] = []
+    for dirpath, dirnames, filenames in os.walk(repo):
+        dirnames[:] = [d for d in dirnames if d not in exclude]
+        for fname in filenames:
+            if os.path.splitext(fname)[1] in _SOURCE_EXTENSIONS:
+                full = os.path.join(dirpath, fname)
+                results.append(os.path.relpath(full, repo))
+    return results
+
+
+def _register_scanner(*rule_ids: int):
+    def decorator(fn: Callable[[str], List[Dict[str, Any]]]):
+        for rid in rule_ids:
+            MAINTENANCE_SCANNERS[rid] = fn
+        return fn
+    return decorator
+
+
+@_register_scanner(2, 6)
+def _scan_exposed_secrets(repo: str) -> List[Dict[str, Any]]:
+    patterns = [
+        (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS access key pattern"),
+        (re.compile(r"""password\s*=\s*['"][^'"]{3,}['"]"""), "hardcoded password"),
+        (re.compile(r"-----BEGIN\s+(RSA|DSA|EC|OPENSSH)?\s*PRIVATE KEY-----"), "private key"),
+        (re.compile(r"""secret_key\s*=\s*['"][^'"]{3,}['"]"""), "hardcoded secret_key"),
+    ]
+    findings: List[Dict[str, Any]] = []
+    for fpath in _source_files(repo, skip_dirs=_SKIP_SCAN_DIRS):
+        try:
+            with open(os.path.join(repo, fpath), "r", encoding="utf-8", errors="ignore") as f:
+                for lineno, line in enumerate(f, 1):
+                    for pat, desc in patterns:
+                        if pat.search(line):
+                            findings.append({"file": fpath, "line": lineno, "detail": f"{desc} detected"})
+                            break
+        except (OSError, UnicodeDecodeError):
+            continue
+    return findings
+
+
+@_register_scanner(15)
+def _scan_container_root(repo: str) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    for fpath in _glob.glob(os.path.join(repo, "**/Dockerfile*"), recursive=True):
+        rel = os.path.relpath(fpath, repo)
+        try:
+            content = open(fpath, "r", encoding="utf-8").read()
+            if "FROM " in content and not re.search(r"^\s*USER\s+\S+", content, re.MULTILINE):
+                findings.append({"file": rel, "line": 0, "detail": "Dockerfile missing USER directive (runs as root)"})
+        except OSError:
+            continue
+    return findings
+
+
+@_register_scanner(18)
+def _scan_exposed_env(repo: str) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", ".env"],
+            cwd=repo, capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            findings.append({"file": ".env", "line": 0, "detail": ".env file is tracked in git"})
+    except OSError:
+        pass
+    return findings
+
+
+@_register_scanner(42)
+def _scan_large_files(repo: str) -> List[Dict[str, Any]]:
+    threshold = 1000
+    findings: List[Dict[str, Any]] = []
+    for fpath in _source_files(repo):
+        try:
+            with open(os.path.join(repo, fpath), "r", encoding="utf-8", errors="ignore") as f:
+                count = sum(1 for _ in f)
+            if count > threshold:
+                findings.append({"file": fpath, "line": 0, "detail": f"{count} lines (threshold: {threshold})"})
+        except OSError:
+            continue
+    return findings
+
+
+@_register_scanner(48)
+def _scan_todo_density(repo: str) -> List[Dict[str, Any]]:
+    todo_re = re.compile(r"\b(TODO|FIXME|HACK|XXX)\b", re.IGNORECASE)
+    threshold = 10
+    findings: List[Dict[str, Any]] = []
+    for fpath in _source_files(repo):
+        try:
+            count = 0
+            with open(os.path.join(repo, fpath), "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if todo_re.search(line):
+                        count += 1
+            if count >= threshold:
+                findings.append({"file": fpath, "line": 0, "detail": f"{count} TODO/FIXME/HACK comments"})
+        except OSError:
+            continue
+    return findings
+
+
+@_register_scanner(142)
+def _scan_broken_doc_links(repo: str) -> List[Dict[str, Any]]:
+    link_re = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+    findings: List[Dict[str, Any]] = []
+    for fpath in _glob.glob(os.path.join(repo, "**/*.md"), recursive=True):
+        rel = os.path.relpath(fpath, repo)
+        fdir = os.path.dirname(fpath)
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                for lineno, line in enumerate(f, 1):
+                    for m in link_re.finditer(line):
+                        target = m.group(2)
+                        if target.startswith(("http://", "https://", "#", "mailto:")):
+                            continue
+                        target_clean = target.split("#")[0].split("?")[0]
+                        if not target_clean:
+                            continue
+                        full = os.path.normpath(os.path.join(fdir, target_clean))
+                        if not os.path.exists(full):
+                            findings.append({"file": rel, "line": lineno,
+                                             "detail": f"broken link to {target_clean}"})
+        except OSError:
+            continue
+    return findings
+
+
+@_register_scanner(148)
+def _scan_stale_readme(repo: str) -> List[Dict[str, Any]]:
+    readme = os.path.join(repo, "README.md")
+    if not os.path.exists(readme):
+        return [{"file": "README.md", "line": 0, "detail": "README.md does not exist"}]
+    readme_mtime = os.path.getmtime(readme)
+    latest_source = 0.0
+    for fpath in _source_files(repo):
+        try:
+            mt = os.path.getmtime(os.path.join(repo, fpath))
+            if mt > latest_source:
+                latest_source = mt
+        except OSError:
+            continue
+    if latest_source <= 0:
+        return []
+    days_stale = (latest_source - readme_mtime) / 86400
+    if days_stale > 90:
+        return [{"file": "README.md", "line": 0, "detail": f"README.md is {int(days_stale)} days behind latest source change"}]
+    return []
+
+
+def _scan_rule(repo: str, rule: MaintenanceRule) -> Dict[str, Any]:
+    scanner = MAINTENANCE_SCANNERS.get(rule.id)
+    if scanner is None:
+        reason = "no built-in scanner"
+        if rule.external_tool:
+            reason += f"; try: {rule.external_tool}"
+        return {"rule_id": rule.id, "status": "skip", "title": rule.title,
+                "category": rule.category, "reason": reason, "findings": []}
+    findings = scanner(repo)
+    status = "fail" if findings else "pass"
+    return {"rule_id": rule.id, "status": status, "title": rule.title,
+            "category": rule.category, "findings": findings}
+
+
+# ---------------------------------------------------------------------------
+# Ticket body formatters
+# ---------------------------------------------------------------------------
+def _format_suggestion_body(rule: MaintenanceRule) -> str:
+    tool_section = ""
+    if rule.external_tool:
+        tool_section = f"""
+## External Tool
+```
+{rule.external_tool}
+```
+"""
+    return f"""## Goal
+Investigate and remediate: {rule.title}
+
+## Detection Heuristic
+{rule.detection}
+{tool_section}
+## Recommended Action
+{rule.action}
+
+## Acceptance Criteria
+- [ ] Run detection heuristic against codebase
+- [ ] Fix any issues found, or close ticket if none exist
+- [ ] Verify fix passes CI
+
+## Notes
+Auto-generated by `mt maintain create` (rule {rule.id}, category: {rule.category})
+"""
+
+
+def _format_finding_body(rule: MaintenanceRule, findings: List[Dict[str, Any]]) -> str:
+    lines = []
+    for f in findings:
+        loc = f"line {f['line']}" if f.get("line") else "file"
+        lines.append(f"- `{f['file']}` ({loc}): {f['detail']}")
+    findings_text = "\n".join(lines)
+    return f"""## Goal
+Fix detected issue: {rule.title}
+
+## Findings
+{findings_text}
+
+## Recommended Action
+{rule.action}
+
+## Acceptance Criteria
+- [ ] Address all findings listed above
+- [ ] Verify fix passes CI
+
+## Notes
+Auto-detected by `mt maintain scan` (rule {rule.id}, category: {rule.category})
+"""
+
+
+# ---------------------------------------------------------------------------
+# Maintain config + external tool invocation + logging
+# ---------------------------------------------------------------------------
+
+_DEFAULT_MAINTAIN_CONFIG = """\
+# tickets/maintain.yaml
+# Enable/disable categories and configure external tools for mt maintain scan.
+
+# Global settings
+settings:
+  log_file: tickets/maintain.log
+  timeout: 60
+  enabled: true
+
+# Per-category tool configuration
+# Set enabled: true and provide the command for your stack.
+# Use {repo} as placeholder for the repository root path.
+
+security:
+  cve_scanner:
+    enabled: false
+    # command: pip-audit --format=json
+    # command: npm audit --json
+    # command: cargo audit --json
+    # command: osv-scanner --format=json -r {repo}
+  secret_scanner:
+    enabled: false
+    # command: gitleaks detect --source={repo} --report-format=json --no-git
+  ssl_check:
+    enabled: false
+    # command: openssl s_client -connect example.com:443 2>/dev/null | openssl x509 -noout -enddate
+
+deps:
+  outdated_check:
+    enabled: false
+    # command: pip list --outdated --format=json
+    # command: npm outdated --json
+    # command: cargo outdated --format=json
+  license_check:
+    enabled: false
+    # command: pip-licenses --format=json
+    # command: license-checker --json
+  unused_deps:
+    enabled: false
+    # command: depcheck --json
+    # command: vulture {repo}
+
+code_health:
+  complexity:
+    enabled: false
+    # command: radon cc {repo} -a -j
+  linter:
+    enabled: false
+    # command: pylint {repo} --output-format=json
+    # command: eslint {repo}/src --format=json
+  formatter_check:
+    enabled: false
+    # command: black --check {repo} --quiet
+  type_check:
+    enabled: false
+    # command: mypy {repo} --no-error-summary
+
+performance:
+  profiler:
+    enabled: false
+  bundle_size:
+    enabled: false
+
+database:
+  migration_check:
+    enabled: false
+  query_analyzer:
+    enabled: false
+
+infrastructure:
+  container_scan:
+    enabled: false
+  k8s_health:
+    enabled: false
+  terraform_drift:
+    enabled: false
+
+observability:
+  prometheus_check:
+    enabled: false
+  alert_check:
+    enabled: false
+
+testing:
+  coverage:
+    enabled: false
+    # command: coverage run -m pytest {repo} -q && coverage json -o /dev/stdout
+    # command: nyc --reporter=json npm test
+  test_runner:
+    enabled: false
+    # command: pytest {repo} --tb=short -q
+
+documentation:
+  link_checker:
+    enabled: false
+    # command: markdown-link-check {repo}/docs/**/*.md --json
+  openapi_diff:
+    enabled: false
+"""
+
+# Maps maintain.yaml category keys to MAINTENANCE_CATEGORIES slugs
+_CONFIG_CATEGORY_MAP = {
+    "security": "security",
+    "deps": "deps",
+    "code_health": "code-health",
+    "performance": "performance",
+    "database": "database",
+    "infrastructure": "infrastructure",
+    "observability": "observability",
+    "testing": "testing",
+    "documentation": "docs",
+}
+
+# Maps maintain.yaml tool keys to rule IDs they cover
+_CONFIG_TOOL_RULE_MAP: Dict[str, List[int]] = {
+    "cve_scanner": [1, 25],
+    "secret_scanner": [2, 6],
+    "ssl_check": [3],
+    "outdated_check": [21],
+    "license_check": [31],
+    "unused_deps": [30],
+    "complexity": [41],
+    "linter": [44, 45, 47],
+    "formatter_check": [53],
+    "type_check": [55],
+    "profiler": [63],
+    "bundle_size": [29],
+    "migration_check": [89],
+    "query_analyzer": [61],
+    "container_scan": [101],
+    "k8s_health": [106],
+    "terraform_drift": [117],
+    "prometheus_check": [121],
+    "alert_check": [122],
+    "coverage": [134],
+    "test_runner": [131],
+    "link_checker": [142],
+    "openapi_diff": [141],
+}
+
+
+def _load_maintain_config(repo: str) -> Dict[str, Any]:
+    """Load tickets/maintain.yaml if it exists, return empty dict otherwise."""
+    config_path = os.path.join(repo, "tickets", "maintain.yaml")
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            text = f.read()
+        try:
+            import yaml  # type: ignore
+            return yaml.safe_load(text) or {}
+        except ImportError:
+            return load_yaml(text)
+    except OSError:
+        return {}
+
+
+def _get_config_log_path(repo: str, config: Dict[str, Any]) -> Optional[str]:
+    """Return the absolute log file path from config, or None."""
+    settings = config.get("settings", {})
+    if not isinstance(settings, dict):
+        return None
+    log_file = settings.get("log_file")
+    if log_file:
+        return os.path.join(repo, log_file)
+    return None
+
+
+def _get_config_timeout(config: Dict[str, Any]) -> int:
+    """Return timeout in seconds from config settings."""
+    settings = config.get("settings", {})
+    if isinstance(settings, dict):
+        return int(settings.get("timeout", 60))
+    return 60
+
+
+def _log_tool_run(log_path: str, rule_id: int, tool_name: str, status: str,
+                  duration: float, findings: int = 0, reason: str = "") -> None:
+    """Append one line to the maintain log file."""
+    ts = utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    parts = [f"{ts}  SCAN  rule={rule_id:<4d} tool={tool_name:<16s} status={status:<5s} duration={duration:.1f}s"]
+    if status == "fail":
+        parts.append(f"findings={findings}")
+    if status == "skip" and reason:
+        parts.append(f"reason={reason}")
+    line = "  ".join(parts)
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def _get_enabled_external_tools(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Extract enabled external tools from config, keyed by tool name."""
+    tools: Dict[str, Dict[str, Any]] = {}
+    for cat_key, cat_slug in _CONFIG_CATEGORY_MAP.items():
+        cat_config = config.get(cat_key)
+        if not isinstance(cat_config, dict):
+            continue
+        for tool_name, tool_conf in cat_config.items():
+            if not isinstance(tool_conf, dict):
+                continue
+            if tool_conf.get("enabled") and tool_conf.get("command"):
+                tools[tool_name] = {
+                    "command": tool_conf["command"],
+                    "category": cat_slug,
+                    "rule_ids": _CONFIG_TOOL_RULE_MAP.get(tool_name, []),
+                }
+    return tools
+
+
+def _run_external_tool(command: str, repo: str, timeout: int) -> Dict[str, Any]:
+    """Run an external tool command, return result dict."""
+    cmd = command.replace("{repo}", repo)
+    try:
+        result = subprocess.run(
+            cmd, shell=True, cwd=repo, capture_output=True, text=True,
+            timeout=timeout,
+        )
+        return {
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    except subprocess.TimeoutExpired:
+        return {"returncode": -1, "stdout": "", "stderr": f"timeout after {timeout}s"}
+    except OSError as e:
+        return {"returncode": -1, "stdout": "", "stderr": str(e)}
+
+
+def _scan_rule_with_config(repo: str, rule: MaintenanceRule,
+                           config: Dict[str, Any], log_path: Optional[str]) -> Dict[str, Any]:
+    """Scan a rule using built-in scanner or configured external tool, with logging."""
+    import time as _time
+
+    # Try built-in scanner first
+    scanner = MAINTENANCE_SCANNERS.get(rule.id)
+    if scanner is not None:
+        start = _time.monotonic()
+        findings = scanner(repo)
+        duration = _time.monotonic() - start
+        status = "fail" if findings else "pass"
+        if log_path:
+            _log_tool_run(log_path, rule.id, "built-in", status, duration,
+                          findings=len(findings))
+        return {"rule_id": rule.id, "status": status, "title": rule.title,
+                "category": rule.category, "findings": findings}
+
+    # Try external tool from config
+    ext_tools = _get_enabled_external_tools(config)
+    for tool_name, tool_info in ext_tools.items():
+        if rule.id in tool_info.get("rule_ids", []):
+            timeout = _get_config_timeout(config)
+            start = _time.monotonic()
+            result = _run_external_tool(tool_info["command"], repo, timeout)
+            duration = _time.monotonic() - start
+            if result["returncode"] == 0:
+                status = "pass"
+                findings_list: List[Dict[str, Any]] = []
+            else:
+                status = "fail"
+                detail = result["stdout"][:500] or result["stderr"][:500]
+                findings_list = [{"file": "", "line": 0,
+                                  "detail": f"external tool '{tool_name}' reported issue: {detail.strip()[:200]}"}]
+            if log_path:
+                _log_tool_run(log_path, rule.id, tool_name, status, duration,
+                              findings=len(findings_list))
+            return {"rule_id": rule.id, "status": status, "title": rule.title,
+                    "category": rule.category, "findings": findings_list}
+
+    # No scanner available
+    reason = "no built-in scanner"
+    if rule.external_tool:
+        reason += f"; try: {rule.external_tool}"
+    if log_path:
+        _log_tool_run(log_path, rule.id, "none", "skip", 0.0, reason="no_config")
+    return {"rule_id": rule.id, "status": "skip", "title": rule.title,
+            "category": rule.category, "reason": reason, "findings": []}
+
+
+def cmd_maintain_init_config(args: argparse.Namespace) -> int:
+    repo = find_repo_root()
+    tdir = tickets_dir(repo)
+    ensure_tickets_dir(tdir)
+    config_path = os.path.join(tdir, "maintain.yaml")
+    if os.path.exists(config_path) and not getattr(args, "force", False):
+        eprint(f"config already exists: {config_path}")
+        eprint("use --force to overwrite")
+        return 1
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.write(_DEFAULT_MAINTAIN_CONFIG)
+    print(config_path)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Subcommands: mt maintain list | scan | create
+# ---------------------------------------------------------------------------
+def _collect_existing_maint_tags(repo: str) -> set:
+    existing = load_all_tickets(repo)
+    tags: set = set()
+    for t in existing:
+        meta = normalize_meta(t.meta)
+        if meta.get("status") != "done":
+            for tag in (meta.get("tags") or []):
+                if tag.startswith("maint-rule-"):
+                    tags.add(tag)
+    return tags
+
+
+def cmd_maintain_list(args: argparse.Namespace) -> int:
+    rules = _filter_maintenance_rules(args.category, args.rule)
+    if not rules:
+        eprint("no rules match the given filters.")
+        return 1
+    for rule in rules:
+        has_scanner = rule.id in MAINTENANCE_SCANNERS
+        scanner_tag = "built-in" if has_scanner else "external"
+        print(f"  {rule.id:3d}  [{rule.category:<16}] {rule.title}  ({scanner_tag})")
+        print(f"        detection: {rule.detection}")
+        if rule.external_tool:
+            print(f"        tool: {rule.external_tool}")
+    return 0
+
+
+def cmd_maintain_scan(args: argparse.Namespace) -> int:
+    if not args.category and not args.rule:
+        eprint("error: --category or --rule required for scanning.")
+        eprint("hint: mt maintain list  (to browse rules first)")
+        return 2
+
+    repo = find_repo_root()
+    rules = _filter_maintenance_rules(args.category, args.rule)
+    if not rules:
+        eprint("no rules match the given filters.")
+        return 1
+
+    config = _load_maintain_config(repo)
+    log_path = _get_config_log_path(repo, config)
+
+    results = [_scan_rule_with_config(repo, rule, config, log_path) for rule in rules]
+
+    if args.format == "json":
+        print(json.dumps(results, indent=2))
+    else:
+        for r in results:
+            status = r["status"].upper()
+            tag = {"PASS": "PASS", "FAIL": "FAIL", "SKIP": "SKIP"}[status]
+            if status == "FAIL":
+                count = len(r["findings"])
+                print(f"[{tag}]  rule {r['rule_id']:3d}: {r['title']} -- {count} finding(s)")
+                for f in r["findings"]:
+                    loc = f":{f['line']}" if f.get("line") else ""
+                    print(f"        {f['file']}{loc}: {f['detail']}")
+            elif status == "PASS":
+                print(f"[{tag}]  rule {r['rule_id']:3d}: {r['title']} -- ok")
+            else:
+                reason = r.get("reason", "no built-in scanner")
+                print(f"[{tag}]  rule {r['rule_id']:3d}: {r['title']} -- {reason}")
+
+    fail_count = sum(1 for r in results if r["status"] == "fail")
+    pass_count = sum(1 for r in results if r["status"] == "pass")
+    skip_count = sum(1 for r in results if r["status"] == "skip")
+    eprint(f"\n{len(results)} rule(s) scanned: {fail_count} failed, {pass_count} passed, {skip_count} skipped")
+    return 1 if fail_count > 0 else 0
+
+
+def cmd_maintain_create(args: argparse.Namespace) -> int:
+    if not args.category and not args.rule:
+        eprint("error: --category or --rule required.")
+        eprint("hint: mt maintain scan --category <cat>  (to scan first)")
+        return 2
+
+    repo = find_repo_root()
+    tdir = tickets_dir(repo)
+    ensure_tickets_dir(tdir)
+
+    rules = _filter_maintenance_rules(args.category, args.rule)
+    if not rules:
+        eprint("no rules match the given filters.")
+        return 1
+
+    # Scan unless --skip-scan
+    config = _load_maintain_config(repo)
+    log_path = _get_config_log_path(repo, config)
+    scan_results: Dict[int, Dict[str, Any]] = {}
+    if not args.skip_scan:
+        for rule in rules:
+            scan_results[rule.id] = _scan_rule_with_config(repo, rule, config, log_path)
+
+    existing_tags = _collect_existing_maint_tags(repo)
+
+    created = 0
+    skipped_dedup = 0
+    skipped_pass = 0
+    for rule in rules:
+        tag = f"maint-rule-{rule.id}"
+        if tag in existing_tags:
+            skipped_dedup += 1
+            continue
+
+        # Determine if we should create a ticket
+        scan = scan_results.get(rule.id)
+        if scan and scan["status"] == "pass":
+            skipped_pass += 1
+            continue
+
+        # Build ticket body
+        if scan and scan["status"] == "fail" and scan["findings"]:
+            body = _format_finding_body(rule, scan["findings"])
+        else:
+            body = _format_suggestion_body(rule)
+
+        if args.dry_run:
+            label = "findings" if (scan and scan["status"] == "fail") else "suggestion"
+            print(f"[dry-run] [{label}] [MAINT-{rule.id:03d}] {rule.title}")
+            created += 1
+            continue
+
+        tid = next_ticket_id_for_repo(repo)
+        meta = normalize_meta({
+            "id": tid,
+            "title": f"[MAINT-{rule.id:03d}] {rule.title}",
+            "status": "ready",
+            "priority": args.priority if args.priority else rule.default_priority,
+            "type": rule.default_type,
+            "effort": rule.default_effort,
+            "labels": rule.labels + ["auto-maintenance"],
+            "tags": [f"maint-rule-{rule.id}", f"maint-cat-{rule.category}"],
+            "owner": args.owner,
+            "created": now_utc_iso(),
+            "updated": now_utc_iso(),
+            "depends_on": [],
+            "branch": None,
+        })
+
+        path = os.path.join(tdir, f"{tid}.md")
+        write_ticket(Ticket(path=path, meta=meta, body=body))
+        print(path)
+        created += 1
+
+    eprint(f"{created} ticket(s) {'would be ' if args.dry_run else ''}created, "
+           f"{skipped_dedup} skipped (duplicates), {skipped_pass} skipped (scan passed)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mt", description="MuonTickets CLI (file-based agent tickets).")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1801,6 +3160,52 @@ def build_parser() -> argparse.ArgumentParser:
     p_version = sub.add_parser("version", help="Show CLI version and build/runtime tool metadata.")
     p_version.add_argument("--json", action="store_true", help="Emit machine-readable JSON output")
     p_version.set_defaults(func=cmd_version)
+
+    p_maint = sub.add_parser("maintain", help="Autonomous maintenance: list rules, scan codebase, create tickets.")
+    maint_sub = p_maint.add_subparsers(dest="maintain_cmd", required=True)
+
+    # mt maintain init-config
+    p_minit = maint_sub.add_parser("init-config", help="Generate default tickets/maintain.yaml config file.")
+    p_minit.add_argument("--force", action="store_true",
+                         help="Overwrite existing config file")
+    p_minit.set_defaults(func=cmd_maintain_init_config)
+
+    # mt maintain list
+    p_mlist = maint_sub.add_parser("list", help="Browse the maintenance rules taxonomy.")
+    p_mlist.add_argument("--category", action="append", default=[],
+                         choices=MAINTENANCE_CATEGORIES,
+                         help="Filter by category (repeatable)")
+    p_mlist.add_argument("--rule", action="append", default=[], type=int,
+                         help="Filter by rule number (repeatable)")
+    p_mlist.set_defaults(func=cmd_maintain_list)
+
+    # mt maintain scan
+    p_mscan = maint_sub.add_parser("scan", help="Scan codebase against maintenance rules (no tickets created).")
+    p_mscan.add_argument("--category", action="append", default=[],
+                         choices=MAINTENANCE_CATEGORIES,
+                         help="Category to scan (repeatable, required: --category or --rule)")
+    p_mscan.add_argument("--rule", action="append", default=[], type=int,
+                         help="Specific rule number (repeatable)")
+    p_mscan.add_argument("--format", choices=["text", "json"], default="text",
+                         help="Output format (default: text)")
+    p_mscan.set_defaults(func=cmd_maintain_scan)
+
+    # mt maintain create
+    p_mcreate = maint_sub.add_parser("create", help="Create tickets for maintenance issues (scans first by default).")
+    p_mcreate.add_argument("--category", action="append", default=[],
+                           choices=MAINTENANCE_CATEGORIES,
+                           help="Category to create tickets for (repeatable, required: --category or --rule)")
+    p_mcreate.add_argument("--rule", action="append", default=[], type=int,
+                           help="Specific rule number (repeatable)")
+    p_mcreate.add_argument("--dry-run", action="store_true",
+                           help="Preview tickets without creating them")
+    p_mcreate.add_argument("--priority", choices=DEFAULT_PRIORITIES, default=None,
+                           help="Override default priority for all generated tickets")
+    p_mcreate.add_argument("--owner", default=None,
+                           help="Pre-assign generated tickets to this owner")
+    p_mcreate.add_argument("--skip-scan", action="store_true",
+                           help="Create suggestion tickets without scanning (legacy behavior)")
+    p_mcreate.set_defaults(func=cmd_maintain_create)
 
     return p
 
