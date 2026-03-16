@@ -85,42 +85,63 @@ const priorities = [_][]const u8{ "p0", "p1", "p2" };
 const ticket_types = [_][]const u8{ "spec", "code", "tests", "docs", "refactor", "chore" };
 
 const default_template =
-    \\\---
-    \\\id: T-000000
-    \\\title: Template: replace title
-    \\\status: ready
-    \\\priority: p1
-    \\\type: code
-    \\\effort: s
-    \\\labels: []
-    \\\tags: []
-    \\\owner: null
-    \\\created: 1970-01-01
-    \\\updated: 1970-01-01
-    \\\depends_on: []
-    \\\branch: null
-    \\\---
+    \\---
+    \\id: T-000000
+    \\title: Template: replace title
+    \\status: ready
+    \\priority: p1
+    \\type: code
+    \\effort: s
+    \\labels: []
+    \\tags: []
+    \\owner: null
+    \\created: 1970-01-01T00:00:00Z
+    \\updated: 1970-01-01T00:00:00Z
+    \\depends_on: []
+    \\branch: null
+    \\retry_count: 0
+    \\retry_limit: 3
+    \\allocated_to: null
+    \\allocated_at: null
+    \\lease_expires_at: null
+    \\last_error: null
+    \\last_attempted_at: null
+    \\---
     \\
-    \\\## Goal
-    \\\Write a single-sentence goal.
+    \\## Goal
+    \\Write a single-sentence goal.
     \\
-    \\\## Acceptance Criteria
-    \\\- [ ] Define clear, testable checks (2–5 items)
+    \\## Acceptance Criteria
+    \\- [ ] Define clear, testable checks (2–5 items)
     \\
-    \\\## Notes
+    \\## Notes
+    \\
+    \\## Agent Assignment
+    \\- Suggested owner: agent-name
+    \\- Suggested branch: feature/short-name
+    \\
+    \\## Implementation Plan
+    \\- [ ] Describe 2-4 concrete execution steps
+    \\- [ ] List test/validation commands to run
+    \\- [ ] Note any dependency handoff requirements
+    \\
+    \\## Queue Lifecycle (if allocated)
+    \\- [ ] Add progress with `mt comment <id> "..."`
+    \\- [ ] If blocked/failing, run `mt fail-task <id> --error "..."`
+    \\- [ ] On completion, move to `needs_review` then `done`
     \\
 ;
 
 const example_body =
-    \\\## Goal
-    \\\Replace this example with a real task.
+    \\## Goal
+    \\Replace this example with a real task.
     \\
-    \\\## Acceptance Criteria
-    \\\- [ ] Delete or edit this ticket
-    \\\- [ ] Create at least one real ticket with `mt new`
+    \\## Acceptance Criteria
+    \\- [ ] Delete or edit this ticket
+    \\- [ ] Create at least one real ticket with `mt new`
     \\
-    \\\## Notes
-    \\\This repository uses MuonTickets for agent-friendly coordination.
+    \\## Notes
+    \\This repository uses MuonTickets for agent-friendly coordination.
     \\
 ;
 
@@ -289,6 +310,13 @@ fn writeTicketFile(allocator: std.mem.Allocator, path: []const u8, id: []const u
         \\updated: {s}
         \\depends_on: []
         \\branch: null
+        \\retry_count: 0
+        \\retry_limit: 3
+        \\allocated_to: null
+        \\allocated_at: null
+        \\lease_expires_at: null
+        \\last_error: null
+        \\last_attempted_at: null
         \\---
         \\
         \\{s}
