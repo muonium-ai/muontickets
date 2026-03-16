@@ -1022,19 +1022,119 @@ fn cmd_validate(max_claimed_per_owner: i32, enforce_done_deps: bool) -> Result<i
         }
     }
 
+    let id_re = id_regex();
+    let date_re = Regex::new(r"^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}Z)?$").expect("valid date regex");
+    let required_fields = &[
+        "id", "title", "status", "priority", "type", "labels",
+        "owner", "created", "updated", "depends_on", "branch",
+    ];
+
     for (path, meta) in &records {
         let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("<unknown>");
+
+        // Required field presence
+        for &field in required_fields {
+            if meta.get(Value::String(field.to_string())).is_none() {
+                errors.push(format!("{filename}: missing required field {field:?}"));
+            }
+        }
+
+        // id: pattern ^T-\d{6}$
+        if let Some(id) = map_get_string(meta, "id") {
+            if !id_re.is_match(&id) {
+                errors.push(format!("{filename}: id must match T-XXXXXX pattern, got {id:?}"));
+            }
+        }
+
+        // title: minLength 3
+        if let Some(title) = map_get_string(meta, "title") {
+            if title.len() < 3 {
+                errors.push(format!("{filename}: title must be at least 3 characters, got {title:?}"));
+            }
+        }
+
+        // status: enum check
         let status = map_get_status(meta);
         if !DEFAULT_STATES.contains(&status.as_str()) {
             errors.push(format!("{filename}: status must be one of {:?}, got {status:?}", DEFAULT_STATES));
         }
+
+        // priority: enum check
+        let priority = map_get_string(meta, "priority").unwrap_or_default();
+        if !DEFAULT_PRIORITIES.contains(&priority.as_str()) {
+            errors.push(format!("{filename}: priority must be one of {:?}, got {priority:?}", DEFAULT_PRIORITIES));
+        }
+
+        // type: enum check
+        let ticket_type = map_get_string(meta, "type").unwrap_or_default();
+        if !DEFAULT_TYPES.contains(&ticket_type.as_str()) {
+            errors.push(format!("{filename}: type must be one of {:?}, got {ticket_type:?}", DEFAULT_TYPES));
+        }
+
+        // effort: enum check
         let effort = map_get_string(meta, "effort").unwrap_or_else(|| "s".to_string());
         if !DEFAULT_EFFORTS.contains(&effort.as_str()) {
             errors.push(format!("{filename}: effort must be one of {:?}, got {effort:?}", DEFAULT_EFFORTS));
         }
+
+        // labels: must be array
+        if let Some(val) = meta.get(Value::String("labels".to_string())) {
+            if !val.is_sequence() && !val.is_null() {
+                errors.push(format!("{filename}: labels must be an array"));
+            }
+        }
+
+        // depends_on: must be array
+        if let Some(val) = meta.get(Value::String("depends_on".to_string())) {
+            if !val.is_sequence() && !val.is_null() {
+                errors.push(format!("{filename}: depends_on must be an array"));
+            }
+        }
+
+        // owner: null or non-empty string
+        if let Some(val) = meta.get(Value::String("owner".to_string())) {
+            if !val.is_null() {
+                if let Some(s) = val.as_str() {
+                    if s.is_empty() {
+                        errors.push(format!("{filename}: owner must be null or a non-empty string"));
+                    }
+                }
+            }
+        }
+
+        // branch: null or non-empty string
+        if let Some(val) = meta.get(Value::String("branch".to_string())) {
+            if !val.is_null() {
+                if let Some(s) = val.as_str() {
+                    if s.is_empty() {
+                        errors.push(format!("{filename}: branch must be null or a non-empty string"));
+                    }
+                }
+            }
+        }
+
+        // created: ISO date pattern
+        let created = map_get_string(meta, "created").unwrap_or_default();
+        if !created.is_empty() && !date_re.is_match(&created) {
+            errors.push(format!("{filename}: created must match YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, got {created:?}"));
+        }
+
+        // updated: ISO date pattern
+        let updated = map_get_string(meta, "updated").unwrap_or_default();
+        if !updated.is_empty() && !date_re.is_match(&updated) {
+            errors.push(format!("{filename}: updated must match YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, got {updated:?}"));
+        }
+
+        // updated >= created (compare as strings, ISO dates sort lexicographically)
+        if !created.is_empty() && !updated.is_empty() && updated < created {
+            errors.push(format!("{filename}: updated ({updated}) is earlier than created ({created})"));
+        }
+
+        // Business logic: claimed must have owner
         if status == "claimed" && map_get_string(meta, "owner").unwrap_or_default().is_empty() {
             errors.push(format!("{filename}: claimed ticket must have owner"));
         }
+        // Business logic: needs_review/done must have branch
         if (status == "needs_review" || status == "done")
             && map_get_string(meta, "branch").unwrap_or_default().is_empty()
         {
