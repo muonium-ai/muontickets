@@ -1486,7 +1486,7 @@ fn cmd_pick(
     map_set_string(&mut meta, "updated", &today_str());
     meta.insert(
         Value::String("score".to_string()),
-        Value::Number(serde_yaml::Number::from(score as i64)),
+        Value::Number(serde_yaml::Number::from(score)),
     );
 
     write_ticket(&path, &meta, &body)?;
@@ -1646,7 +1646,7 @@ fn cmd_allocate_task(
     map_set_string(&mut meta, "branch", &chosen_branch);
     meta.insert(
         Value::String("score".to_string()),
-        Value::Number(serde_yaml::Number::from(score as i64)),
+        Value::Number(serde_yaml::Number::from(score)),
     );
 
     write_ticket(&path, &meta, &body)?;
