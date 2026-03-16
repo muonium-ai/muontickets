@@ -174,12 +174,249 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    Maintain {
+        #[command(subcommand)]
+        subcmd: MaintainCmd,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MaintainCmd {
+    InitConfig {
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        detect: bool,
+    },
+    Doctor,
+    List {
+        #[arg(long)]
+        category: Vec<String>,
+        #[arg(long)]
+        rule: Vec<i32>,
+    },
+    Scan {
+        #[arg(long)]
+        category: Vec<String>,
+        #[arg(long)]
+        rule: Vec<i32>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        diff: bool,
+        #[arg(long, default_value = "text")]
+        format: String,
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        fix: bool,
+    },
+    Create {
+        #[arg(long)]
+        category: Vec<String>,
+        #[arg(long)]
+        rule: Vec<i32>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        #[arg(long = "skip-scan")]
+        skip_scan: bool,
+        #[arg(long)]
+        priority: Option<String>,
+        #[arg(long)]
+        owner: Option<String>,
+    },
 }
 
 const DEFAULT_STATES: &[&str] = &["ready", "claimed", "blocked", "needs_review", "done"];
 const DEFAULT_PRIORITIES: &[&str] = &["p0", "p1", "p2"];
 const DEFAULT_TYPES: &[&str] = &["spec", "code", "tests", "docs", "refactor", "chore"];
 const DEFAULT_EFFORTS: &[&str] = &["xs", "s", "m", "l"];
+
+const MAINTENANCE_CATEGORIES: &[&str] = &[
+    "security", "deps", "code-health", "performance",
+    "database", "infrastructure", "observability",
+    "testing", "docs",
+];
+
+struct MaintenanceRule {
+    id: i32,
+    title: &'static str,
+    category: &'static str,
+    detection: &'static str,
+    action: &'static str,
+    default_priority: &'static str,
+    default_type: &'static str,
+    default_effort: &'static str,
+    labels: &'static [&'static str],
+    external_tool: &'static str,
+}
+
+const MAINTENANCE_RULES: &[MaintenanceRule] = &[
+    // Security (1-20)
+    MaintenanceRule { id: 1, title: "CVE Dependency Vulnerability", category: "security", detection: "dependency version < secure version from CVE DB", action: "upgrade dependency and run tests", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "security"], external_tool: "npm audit | pip-audit | cargo audit | osv-scanner | trivy | grype" },
+    MaintenanceRule { id: 2, title: "Exposed Secrets in Repo", category: "security", detection: "regex patterns (AKIA..., private_key)", action: "remove secret and move to vault", default_priority: "p0", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "" },
+    MaintenanceRule { id: 3, title: "Expired SSL Certificate", category: "security", detection: "ssl_expiry_date < now + 14 days", action: "renew certificate", default_priority: "p0", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "openssl s_client -connect host:443 | openssl x509 -noout -dates" },
+    MaintenanceRule { id: 4, title: "Missing Security Headers", category: "security", detection: "missing CSP, X-Frame-Options, X-XSS-Protection", action: "add headers", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "curl -I <url> (check response headers for CSP, X-Frame-Options, X-XSS-Protection)" },
+    MaintenanceRule { id: 5, title: "Insecure Hashing Algorithm", category: "security", detection: "md5 or sha1 usage", action: "migrate to argon2/bcrypt", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "security"], external_tool: "grep -rn 'md5\\|sha1\\|MD5\\|SHA1' --include='*.py' --include='*.js' --include='*.go'" },
+    MaintenanceRule { id: 6, title: "Hardcoded Password", category: "security", detection: "password=\"...\" pattern", action: "move to environment variable", default_priority: "p0", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "" },
+    MaintenanceRule { id: 7, title: "Open Debug Ports", category: "security", detection: "container exposing debug ports (9229, 3000)", action: "disable in production", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "docker inspect <container> | grep -i port; kubectl get svc -o json" },
+    MaintenanceRule { id: 8, title: "Unauthenticated Admin Endpoint", category: "security", detection: "/admin route without auth middleware", action: "enforce auth guard", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "security"], external_tool: "review route definitions for /admin paths without auth middleware" },
+    MaintenanceRule { id: 9, title: "Excessive IAM Privileges", category: "security", detection: "policy contains \"*\"", action: "restrict permissions", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "security"], external_tool: "aws iam list-policies --only-attached | grep '\"*\"'; gcloud iam policies" },
+    MaintenanceRule { id: 10, title: "Unencrypted DB Connection", category: "security", detection: "connection string missing TLS flag", action: "enforce encrypted connections", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "grep -rn 'sslmode=disable\\|ssl=false\\|useSSL=false' (connection strings)" },
+    MaintenanceRule { id: 11, title: "Weak JWT Secret", category: "security", detection: "JWT secret length < 32 characters or common value", action: "rotate to strong secret", default_priority: "p0", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "grep -rn 'jwt.sign\\|JWT_SECRET\\|jwt_secret' and check secret length/entropy" },
+    MaintenanceRule { id: 12, title: "Missing Rate Limiting", category: "security", detection: "API endpoints without rate limit middleware", action: "add rate limiting", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "security"], external_tool: "review API framework middleware config for rate-limit setup" },
+    MaintenanceRule { id: 13, title: "Disabled CSRF Protection", category: "security", detection: "CSRF middleware disabled or missing", action: "enable CSRF protection", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "review framework config for CSRF middleware (csrf_exempt, disable_csrf)" },
+    MaintenanceRule { id: 14, title: "Dependency Signature Mismatch", category: "security", detection: "package checksum does not match registry", action: "verify and re-fetch dependency", default_priority: "p0", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "npm audit signatures | pip hash --verify | cargo verify-project" },
+    MaintenanceRule { id: 15, title: "Container Running as Root", category: "security", detection: "Dockerfile missing USER directive", action: "add non-root user", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "" },
+    MaintenanceRule { id: 16, title: "Outdated OpenSSL", category: "security", detection: "OpenSSL version < latest stable", action: "upgrade OpenSSL", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "security"], external_tool: "openssl version; dpkg -l openssl; brew info openssl" },
+    MaintenanceRule { id: 17, title: "Public Cloud Bucket", category: "security", detection: "storage bucket with public access enabled", action: "restrict bucket access", default_priority: "p0", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "aws s3api get-bucket-acl --bucket <name>; gsutil iam get gs://<bucket>" },
+    MaintenanceRule { id: 18, title: "Exposed .env File", category: "security", detection: ".env file tracked in git or publicly accessible", action: "remove from tracking and add to .gitignore", default_priority: "p0", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "" },
+    MaintenanceRule { id: 19, title: "Missing MFA for Admin", category: "security", detection: "admin accounts without MFA enabled", action: "enforce MFA", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "security"], external_tool: "aws iam get-login-profile; review admin user MFA status in cloud console" },
+    MaintenanceRule { id: 20, title: "Suspicious Login Activity", category: "security", detection: "unusual login patterns or locations", action: "investigate and rotate credentials", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "security"], external_tool: "review auth/access logs for unusual IPs, times, or geolocations" },
+    // Deps (21-40)
+    MaintenanceRule { id: 21, title: "Outdated Dependency", category: "deps", detection: "npm/pip/cargo outdated", action: "upgrade version", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "deps"], external_tool: "npm outdated | pip list --outdated | cargo outdated | uv pip list --outdated" },
+    MaintenanceRule { id: 22, title: "Deprecated Library", category: "deps", detection: "upstream marked deprecated", action: "migrate to replacement", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "deps"], external_tool: "npm info <pkg> deprecated; check PyPI/crates.io status page" },
+    MaintenanceRule { id: 23, title: "Unmaintained Dependency", category: "deps", detection: "last commit > 3 years", action: "replace library", default_priority: "p1", default_type: "chore", default_effort: "l", labels: &["maintenance", "deps"], external_tool: "check GitHub last commit date via API; npm info <pkg> time.modified" },
+    MaintenanceRule { id: 24, title: "Duplicate Libraries", category: "deps", detection: "multiple versions installed", action: "consolidate version", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "deps"], external_tool: "npm ls --all | grep deduped; pip list | sort | uniq -d" },
+    MaintenanceRule { id: 25, title: "Vulnerable Transitive Dependency", category: "deps", detection: "nested CVE scan", action: "update dependency tree", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "deps"], external_tool: "npm audit | pip-audit | cargo audit | osv-scanner (transitive deps)" },
+    MaintenanceRule { id: 26, title: "Lockfile Drift", category: "deps", detection: "mismatch with installed packages", action: "rebuild lockfile", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "deps"], external_tool: "npm ci --dry-run; pip freeze > /tmp/freeze.txt && diff requirements.txt /tmp/freeze.txt" },
+    MaintenanceRule { id: 27, title: "Outdated Build Toolchain", category: "deps", detection: "compiler older than LTS", action: "upgrade toolchain", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "deps"], external_tool: "rustc --version; python3 --version; node --version; go version; zig version" },
+    MaintenanceRule { id: 28, title: "Runtime EOL", category: "deps", detection: "runtime end-of-life version", action: "upgrade runtime", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "deps"], external_tool: "check endoflife.date API for runtime EOL dates (python, node, ruby, etc.)" },
+    MaintenanceRule { id: 29, title: "Dependency Size Explosion", category: "deps", detection: "bundle size threshold exceeded", action: "audit dependency", default_priority: "p2", default_type: "chore", default_effort: "m", labels: &["maintenance", "deps"], external_tool: "npm pack --dry-run; du -sh node_modules; cargo bloat" },
+    MaintenanceRule { id: 30, title: "Unused Dependency", category: "deps", detection: "static import analysis", action: "remove package", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "deps"], external_tool: "depcheck (npm) | vulture (python) | cargo-udeps (rust)" },
+    MaintenanceRule { id: 31, title: "License Change Detection", category: "deps", detection: "dependency license changed in new version", action: "review license compatibility", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "deps"], external_tool: "license-checker (npm) | pip-licenses | cargo-license; diff against previous" },
+    MaintenanceRule { id: 32, title: "Conflicting Version Ranges", category: "deps", detection: "dependency resolution conflicts", action: "resolve version conflicts", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "deps"], external_tool: "npm ls --all 2>&1 | grep 'ERESOLVE\\|peer dep'; pip check" },
+    MaintenanceRule { id: 33, title: "Unused Peer Dependencies", category: "deps", detection: "peer dependency declared but unused", action: "remove peer dependency", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "deps"], external_tool: "npm ls --all | grep 'peer dep'" },
+    MaintenanceRule { id: 34, title: "Broken Registry References", category: "deps", detection: "package registry URL unreachable", action: "fix registry reference", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "deps"], external_tool: "npm ping; pip config list (check index-url reachability)" },
+    MaintenanceRule { id: 35, title: "Checksum Mismatch", category: "deps", detection: "package checksum mismatch on install", action: "re-fetch and verify package", default_priority: "p0", default_type: "chore", default_effort: "s", labels: &["maintenance", "deps"], external_tool: "npm cache verify; pip hash --verify; cargo verify-project" },
+    MaintenanceRule { id: 36, title: "Incompatible Binary Architecture", category: "deps", detection: "native module built for wrong arch", action: "rebuild for target architecture", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "deps"], external_tool: "file node_modules/**/*.node; check platform/arch in native bindings" },
+    MaintenanceRule { id: 37, title: "Outdated WASM Runtime", category: "deps", detection: "WASM runtime version behind stable", action: "upgrade WASM runtime", default_priority: "p2", default_type: "chore", default_effort: "m", labels: &["maintenance", "deps"], external_tool: "check wasmtime/wasmer version against latest stable release" },
+    MaintenanceRule { id: 38, title: "Outdated GPU Drivers", category: "deps", detection: "GPU driver version behind stable", action: "upgrade GPU drivers", default_priority: "p2", default_type: "chore", default_effort: "m", labels: &["maintenance", "deps"], external_tool: "nvidia-smi; check driver version against CUDA compatibility matrix" },
+    MaintenanceRule { id: 39, title: "Mirror Outage Fallback", category: "deps", detection: "primary package mirror unreachable", action: "configure fallback mirror", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "deps"], external_tool: "npm ping --registry <mirror>; pip install --dry-run -i <mirror>" },
+    MaintenanceRule { id: 40, title: "Corrupted Dependency Cache", category: "deps", detection: "dependency cache integrity check fails", action: "clear and rebuild cache", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "deps"], external_tool: "npm cache clean --force; pip cache purge; cargo clean" },
+    // Code Health (41-60)
+    MaintenanceRule { id: 41, title: "High Cyclomatic Complexity", category: "code-health", detection: "cyclomatic complexity > 15", action: "refactor into smaller functions", default_priority: "p2", default_type: "refactor", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "radon cc -a (python) | eslint --rule complexity (js) | gocyclo (go)" },
+    MaintenanceRule { id: 42, title: "File Too Large", category: "code-health", detection: "file > 1000 lines", action: "split into modules", default_priority: "p2", default_type: "refactor", default_effort: "l", labels: &["maintenance", "code-health"], external_tool: "" },
+    MaintenanceRule { id: 43, title: "Duplicate Code Blocks", category: "code-health", detection: "repeated code blocks detected", action: "extract shared function", default_priority: "p2", default_type: "refactor", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "jscpd | flay (ruby) | PMD CPD (java); semgrep --config=p/duplicate-code" },
+    MaintenanceRule { id: 44, title: "Dead Code Detection", category: "code-health", detection: "unreachable or unused code paths", action: "remove dead code", default_priority: "p2", default_type: "refactor", default_effort: "s", labels: &["maintenance", "code-health"], external_tool: "vulture (python) | ts-prune (typescript) | deadcode (go)" },
+    MaintenanceRule { id: 45, title: "Deprecated API Usage", category: "code-health", detection: "calls to deprecated functions/methods", action: "migrate to replacement API", default_priority: "p1", default_type: "refactor", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "grep -rn '@deprecated\\|DeprecationWarning\\|DEPRECATED'" },
+    MaintenanceRule { id: 46, title: "Missing Error Handling", category: "code-health", detection: "unhandled exceptions or missing error checks", action: "add error handling", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "pylint --disable=all --enable=W0702,W0703 | eslint no-empty-catch" },
+    MaintenanceRule { id: 47, title: "Logging Inconsistency", category: "code-health", detection: "inconsistent log levels or formats", action: "standardize logging", default_priority: "p2", default_type: "refactor", default_effort: "s", labels: &["maintenance", "code-health"], external_tool: "grep -rn 'console.log\\|print(\\|log.Debug' and review log level consistency" },
+    MaintenanceRule { id: 48, title: "Excessive TODO Comments", category: "code-health", detection: "TODO/FIXME/HACK count exceeds threshold", action: "address or create tickets for TODOs", default_priority: "p2", default_type: "chore", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "" },
+    MaintenanceRule { id: 49, title: "Long Parameter Lists", category: "code-health", detection: "function parameters > 6", action: "refactor to use parameter objects", default_priority: "p2", default_type: "refactor", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "pylint --disable=all --enable=R0913 | eslint max-params" },
+    MaintenanceRule { id: 50, title: "Circular Imports", category: "code-health", detection: "circular import dependency detected", action: "restructure module dependencies", default_priority: "p1", default_type: "refactor", default_effort: "l", labels: &["maintenance", "code-health"], external_tool: "python -c 'import importlib; importlib.import_module(\"pkg\")' | madge --circular (js)" },
+    MaintenanceRule { id: 51, title: "Missing Type Hints", category: "code-health", detection: "functions without type annotations", action: "add type hints", default_priority: "p2", default_type: "refactor", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "mypy --strict | pyright; check function signatures for missing annotations" },
+    MaintenanceRule { id: 52, title: "Unused Imports", category: "code-health", detection: "imported modules never referenced", action: "remove unused imports", default_priority: "p2", default_type: "refactor", default_effort: "xs", labels: &["maintenance", "code-health"], external_tool: "autoflake --check (python) | eslint no-unused-vars (js)" },
+    MaintenanceRule { id: 53, title: "Inconsistent Formatting", category: "code-health", detection: "code style deviates from project standard", action: "run formatter", default_priority: "p2", default_type: "chore", default_effort: "xs", labels: &["maintenance", "code-health"], external_tool: "black --check (python) | prettier --check (js) | rustfmt --check (rust)" },
+    MaintenanceRule { id: 54, title: "Poor Naming Patterns", category: "code-health", detection: "variable/function names unclear or inconsistent", action: "rename for clarity", default_priority: "p2", default_type: "refactor", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "pylint naming-convention | eslint camelcase/naming-convention" },
+    MaintenanceRule { id: 55, title: "Missing Docstrings", category: "code-health", detection: "public functions without documentation", action: "add docstrings", default_priority: "p2", default_type: "docs", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "pydocstyle | darglint | interrogate (python)" },
+    MaintenanceRule { id: 56, title: "Nested Loops", category: "code-health", detection: "deeply nested loops (> 3 levels)", action: "refactor to reduce nesting", default_priority: "p2", default_type: "refactor", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "review code for nested for/while loops > 3 levels deep" },
+    MaintenanceRule { id: 57, title: "Unsafe Pointer Operations", category: "code-health", detection: "raw pointer usage without safety checks", action: "add bounds checking or use safe alternatives", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "clippy (rust) | cppcheck (c/c++) | review unsafe blocks" },
+    MaintenanceRule { id: 58, title: "Unbounded Recursion", category: "code-health", detection: "recursive function without base case limit", action: "add recursion depth limit", default_priority: "p1", default_type: "code", default_effort: "s", labels: &["maintenance", "code-health"], external_tool: "review recursive functions for missing base case or depth limit" },
+    MaintenanceRule { id: 59, title: "Magic Numbers", category: "code-health", detection: "unexplained numeric literals in code", action: "extract to named constants", default_priority: "p2", default_type: "refactor", default_effort: "s", labels: &["maintenance", "code-health"], external_tool: "pylint --disable=all --enable=W0612 | eslint no-magic-numbers" },
+    MaintenanceRule { id: 60, title: "Mutable Global State", category: "code-health", detection: "global variables modified at runtime", action: "refactor to local/injected state", default_priority: "p1", default_type: "refactor", default_effort: "m", labels: &["maintenance", "code-health"], external_tool: "grep -rn 'global ' (python) | review mutable module-level state" },
+    // Performance (61-80)
+    MaintenanceRule { id: 61, title: "Slow Database Query", category: "performance", detection: "query execution > 500ms", action: "optimize query or add index", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "EXPLAIN ANALYZE <query>; pg_stat_statements; slow query log" },
+    MaintenanceRule { id: 62, title: "N+1 Query Pattern", category: "performance", detection: "repeated queries in loop", action: "batch or join queries", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "django-debug-toolbar | bullet gem (rails) | review ORM queries in loops" },
+    MaintenanceRule { id: 63, title: "Memory Leak Detection", category: "performance", detection: "heap growth without release", action: "fix memory leak", default_priority: "p0", default_type: "code", default_effort: "l", labels: &["maintenance", "performance"], external_tool: "valgrind --leak-check=full | heaptrack | node --inspect + Chrome DevTools" },
+    MaintenanceRule { id: 64, title: "High API Latency", category: "performance", detection: "p95 latency exceeds threshold", action: "profile and optimize endpoint", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "check APM dashboards (Datadog, New Relic, Grafana) for p95 latency" },
+    MaintenanceRule { id: 65, title: "Cache Miss Ratio", category: "performance", detection: "cache miss ratio > 0.6", action: "tune cache strategy", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "redis-cli INFO stats | memcached stats; check cache hit/miss metrics" },
+    MaintenanceRule { id: 66, title: "Large Response Payloads", category: "performance", detection: "API response size exceeds threshold", action: "add pagination or compression", default_priority: "p2", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "curl -s <api> | wc -c; check API response sizes in APM" },
+    MaintenanceRule { id: 67, title: "O(n^2) Algorithms", category: "performance", detection: "quadratic complexity in hot paths", action: "replace with efficient algorithm", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "review hot-path code for nested loops; profile with py-spy/perf/flamegraph" },
+    MaintenanceRule { id: 68, title: "Unbounded Job Queue", category: "performance", detection: "job queue grows without limit", action: "add backpressure or queue limits", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "check job queue metrics (Sidekiq, Celery, Bull) for queue depth trends" },
+    MaintenanceRule { id: 69, title: "Excessive Logging Overhead", category: "performance", detection: "high-frequency logging in hot paths", action: "reduce log verbosity or sample", default_priority: "p2", default_type: "code", default_effort: "s", labels: &["maintenance", "performance"], external_tool: "review logging in hot paths; check log volume metrics" },
+    MaintenanceRule { id: 70, title: "Slow Cold Start", category: "performance", detection: "service startup > threshold", action: "optimize initialization", default_priority: "p2", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "time service startup; profile with py-spy/perf during init" },
+    MaintenanceRule { id: 71, title: "Thread Starvation", category: "performance", detection: "thread pool exhaustion detected", action: "increase pool size or reduce blocking", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "jstack (java) | py-spy dump | review thread pool configs" },
+    MaintenanceRule { id: 72, title: "Lock Contention", category: "performance", detection: "high lock wait times", action: "reduce critical section scope", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "lock contention profiling; review mutex/lock usage in hot paths" },
+    MaintenanceRule { id: 73, title: "Blocking IO in Async Code", category: "performance", detection: "synchronous IO in async context", action: "convert to async IO", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "review async code for sync IO calls (requests, open, subprocess)" },
+    MaintenanceRule { id: 74, title: "Oversized Images", category: "performance", detection: "image assets exceed size threshold", action: "compress or resize images", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "performance"], external_tool: "find . -name '*.png' -o -name '*.jpg' | xargs identify -format '%f %wx%h %b\\n'" },
+    MaintenanceRule { id: 75, title: "Redundant Network Calls", category: "performance", detection: "duplicate API calls for same data", action: "deduplicate or cache results", default_priority: "p2", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "review network calls in code; check for duplicate HTTP requests in APM" },
+    MaintenanceRule { id: 76, title: "Inefficient Serialization", category: "performance", detection: "slow serialization format in hot path", action: "switch to efficient format", default_priority: "p2", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "benchmark serialization (json vs msgpack vs protobuf) in hot paths" },
+    MaintenanceRule { id: 77, title: "Slow WASM Execution Path", category: "performance", detection: "WASM module performance below threshold", action: "profile and optimize WASM code", default_priority: "p2", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "wasm profiling tools; review WASM module execution times" },
+    MaintenanceRule { id: 78, title: "GPU Underutilization", category: "performance", detection: "GPU compute usage below capacity", action: "optimize GPU workload distribution", default_priority: "p2", default_type: "code", default_effort: "l", labels: &["maintenance", "performance"], external_tool: "nvidia-smi dmon; review GPU utilization metrics" },
+    MaintenanceRule { id: 79, title: "Excessive Disk Writes", category: "performance", detection: "write IOPS exceeds threshold", action: "batch or buffer writes", default_priority: "p2", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "iostat; check write IOPS metrics; review fsync/flush patterns" },
+    MaintenanceRule { id: 80, title: "Poor Pagination", category: "performance", detection: "unbounded result sets returned", action: "implement cursor-based pagination", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "performance"], external_tool: "review API endpoints for unbounded SELECT/find queries without LIMIT" },
+    // Database (81-100)
+    MaintenanceRule { id: 81, title: "Missing Index", category: "database", detection: "frequent query without supporting index", action: "add database index", default_priority: "p1", default_type: "code", default_effort: "s", labels: &["maintenance", "database"], external_tool: "EXPLAIN ANALYZE <query>; pg_stat_user_tables (seq_scan count); slow query log" },
+    MaintenanceRule { id: 82, title: "Unused Index", category: "database", detection: "index with zero reads", action: "drop unused index", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "database"], external_tool: "pg_stat_user_indexes (idx_scan = 0); MySQL sys.schema_unused_indexes" },
+    MaintenanceRule { id: 83, title: "Table Bloat", category: "database", detection: "dead tuple ratio exceeds threshold", action: "vacuum or repack table", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "database"], external_tool: "pg_stat_user_tables (n_dead_tup); VACUUM VERBOSE" },
+    MaintenanceRule { id: 84, title: "Fragmented Index", category: "database", detection: "index fragmentation > threshold", action: "rebuild index", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "database"], external_tool: "pg_stat_user_indexes; DBCC SHOWCONTIG (SQL Server); OPTIMIZE TABLE (MySQL)" },
+    MaintenanceRule { id: 85, title: "Orphan Records", category: "database", detection: "records referencing deleted parents", action: "clean up orphan records", default_priority: "p2", default_type: "chore", default_effort: "m", labels: &["maintenance", "database"], external_tool: "SELECT orphans with LEFT JOIN ... WHERE parent.id IS NULL" },
+    MaintenanceRule { id: 86, title: "Duplicate Rows", category: "database", detection: "duplicate records detected", action: "deduplicate data", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "database"], external_tool: "SELECT columns, COUNT(*) GROUP BY columns HAVING COUNT(*) > 1" },
+    MaintenanceRule { id: 87, title: "Data Format Drift", category: "database", detection: "column data deviates from expected format", action: "normalize data format", default_priority: "p2", default_type: "chore", default_effort: "m", labels: &["maintenance", "database"], external_tool: "sample column data and check format consistency; pg_typeof()" },
+    MaintenanceRule { id: 88, title: "Backup Failure", category: "database", detection: "last backup older than policy threshold", action: "investigate and fix backup", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "database"], external_tool: "pg_stat_archiver; check backup tool logs (pg_dump, mysqldump, mongodump)" },
+    MaintenanceRule { id: 89, title: "Failed Migration", category: "database", detection: "migration in failed/partial state", action: "fix and rerun migration", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "database"], external_tool: "check migration status table; rails db:migrate:status | alembic current" },
+    MaintenanceRule { id: 90, title: "Slow Join Queries", category: "database", detection: "join query exceeding time threshold", action: "optimize join or denormalize", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "database"], external_tool: "EXPLAIN ANALYZE for JOIN queries; check pg_stat_statements for slow joins" },
+    MaintenanceRule { id: 91, title: "Oversized JSON Columns", category: "database", detection: "JSON column average size exceeds threshold", action: "normalize into relational columns", default_priority: "p2", default_type: "refactor", default_effort: "l", labels: &["maintenance", "database"], external_tool: "SELECT avg(pg_column_size(json_col)) FROM table; check JSON column sizes" },
+    MaintenanceRule { id: 92, title: "Unused Tables", category: "database", detection: "tables with no recent reads or writes", action: "archive or drop unused tables", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "database"], external_tool: "pg_stat_user_tables (last_autovacuum, seq_scan, idx_scan for zero-activity tables)" },
+    MaintenanceRule { id: 93, title: "Table Scan Alerts", category: "database", detection: "full table scan on large table", action: "add index or optimize query", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "database"], external_tool: "pg_stat_user_tables (seq_scan on large tables); MySQL slow query log" },
+    MaintenanceRule { id: 94, title: "Encoding Mismatch", category: "database", detection: "mixed character encodings across tables", action: "standardize encoding", default_priority: "p2", default_type: "chore", default_effort: "m", labels: &["maintenance", "database"], external_tool: "SELECT table_name, character_set_name FROM information_schema.columns" },
+    MaintenanceRule { id: 95, title: "Unbounded Table Growth", category: "database", detection: "table row count growing without retention policy", action: "implement retention or archival", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "database"], external_tool: "SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC" },
+    MaintenanceRule { id: 96, title: "Missing Partitioning", category: "database", detection: "large table without partitioning scheme", action: "add table partitioning", default_priority: "p2", default_type: "chore", default_effort: "l", labels: &["maintenance", "database"], external_tool: "check table sizes; review partitioning strategy for tables > 10M rows" },
+    MaintenanceRule { id: 97, title: "Outdated Statistics", category: "database", detection: "query planner statistics stale", action: "analyze/update statistics", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "database"], external_tool: "pg_stat_user_tables (last_analyze); ANALYZE VERBOSE" },
+    MaintenanceRule { id: 98, title: "Corrupted Index Pages", category: "database", detection: "index corruption detected", action: "rebuild corrupted index", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "database"], external_tool: "pg_catalog.pg_index (indisvalid = false); REINDEX" },
+    MaintenanceRule { id: 99, title: "Replication Lag", category: "database", detection: "replica behind primary by threshold", action: "investigate replication lag", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "database"], external_tool: "SELECT * FROM pg_stat_replication; check replica lag metrics" },
+    MaintenanceRule { id: 100, title: "Foreign Key Inconsistencies", category: "database", detection: "orphaned foreign key references", action: "fix referential integrity", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "database"], external_tool: "check foreign key constraints; SELECT with LEFT JOIN for orphaned references" },
+    // Infrastructure (101-120)
+    MaintenanceRule { id: 101, title: "Container Image Outdated", category: "infrastructure", detection: "base image version behind latest", action: "update container base image", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "docker pull <image>:latest --dry-run; compare Dockerfile FROM tag to latest" },
+    MaintenanceRule { id: 102, title: "Missing OS Security Patches", category: "infrastructure", detection: "OS packages with available security updates", action: "apply security patches", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "apt list --upgradable | yum check-update | apk version -l '<'" },
+    MaintenanceRule { id: 103, title: "Low Disk Space", category: "infrastructure", detection: "disk usage > 85%", action: "clean up or expand storage", default_priority: "p0", default_type: "chore", default_effort: "s", labels: &["maintenance", "infrastructure"], external_tool: "df -h; kubectl top nodes; cloud console storage metrics" },
+    MaintenanceRule { id: 104, title: "CPU Saturation", category: "infrastructure", detection: "sustained CPU usage > 90%", action: "scale or optimize workload", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "top; kubectl top pods; cloud monitoring CPU metrics" },
+    MaintenanceRule { id: 105, title: "Memory Pressure", category: "infrastructure", detection: "memory usage > 90% or OOM events", action: "investigate memory usage and scale", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "free -h; kubectl top pods; check OOM events in dmesg/journal" },
+    MaintenanceRule { id: 106, title: "CrashLoop Pods", category: "infrastructure", detection: "pod in CrashLoopBackOff state", action: "diagnose and fix crash loop", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "kubectl get pods --field-selector=status.phase!=Running; kubectl describe pod" },
+    MaintenanceRule { id: 107, title: "Orphan Containers", category: "infrastructure", detection: "stopped containers consuming resources", action: "remove orphan containers", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "infrastructure"], external_tool: "docker ps -a --filter status=exited; docker system df" },
+    MaintenanceRule { id: 108, title: "Stale Storage Volumes", category: "infrastructure", detection: "unattached volumes with no recent access", action: "clean up stale volumes", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "infrastructure"], external_tool: "kubectl get pv --no-headers | grep Available; aws ec2 describe-volumes --filters Name=status,Values=available" },
+    MaintenanceRule { id: 109, title: "Expired DNS Records", category: "infrastructure", detection: "DNS records pointing to decommissioned resources", action: "update DNS records", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "infrastructure"], external_tool: "dig <hostname>; nslookup; check DNS records against active infrastructure" },
+    MaintenanceRule { id: 110, title: "Misconfigured Load Balancer", category: "infrastructure", detection: "health check failures or routing errors", action: "fix load balancer configuration", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "kubectl describe ingress; aws elb describe-target-health; health check logs" },
+    MaintenanceRule { id: 111, title: "High Network Latency", category: "infrastructure", detection: "inter-service latency exceeds threshold", action: "investigate network path", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "ping; traceroute; mtr; check network latency metrics in monitoring" },
+    MaintenanceRule { id: 112, title: "Unused Cloud Resources", category: "infrastructure", detection: "idle VMs, IPs, or load balancers", action: "decommission unused resources", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "infrastructure"], external_tool: "aws ec2 describe-instances --filters Name=instance-state-name,Values=stopped; cloud cost reports" },
+    MaintenanceRule { id: 113, title: "Broken CI Runners", category: "infrastructure", detection: "CI runner offline or failing jobs", action: "repair or replace CI runner", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "check CI dashboard for offline runners; gitlab-runner verify; gh api /repos/{owner}/{repo}/actions/runners" },
+    MaintenanceRule { id: 114, title: "Container Restart Loops", category: "infrastructure", detection: "container restart count exceeds threshold", action: "diagnose restart cause", default_priority: "p0", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "docker inspect --format='{{.RestartCount}}'; kubectl describe pod (restart count)" },
+    MaintenanceRule { id: 115, title: "Unused Security Groups", category: "infrastructure", detection: "security groups not attached to resources", action: "remove unused security groups", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "infrastructure"], external_tool: "aws ec2 describe-security-groups; check for unattached security groups" },
+    MaintenanceRule { id: 116, title: "Expired API Gateway Cert", category: "infrastructure", detection: "API gateway certificate expiring soon", action: "renew API gateway certificate", default_priority: "p0", default_type: "chore", default_effort: "s", labels: &["maintenance", "infrastructure"], external_tool: "aws apigateway get-domain-names; check certificate expiry dates" },
+    MaintenanceRule { id: 117, title: "Infrastructure Drift", category: "infrastructure", detection: "live config differs from IaC definitions", action: "reconcile infrastructure state", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "terraform plan | pulumi preview | compare live state vs IaC definitions" },
+    MaintenanceRule { id: 118, title: "Registry Cleanup Required", category: "infrastructure", detection: "container registry storage exceeds threshold", action: "prune old images from registry", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "infrastructure"], external_tool: "docker system df; cloud registry storage metrics; skopeo list-tags" },
+    MaintenanceRule { id: 119, title: "Log Storage Overflow", category: "infrastructure", detection: "log volume approaching storage limit", action: "rotate or archive logs", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "infrastructure"], external_tool: "du -sh /var/log; check log rotation config; cloud logging storage metrics" },
+    MaintenanceRule { id: 120, title: "Node Version Drift", category: "infrastructure", detection: "cluster nodes running different versions", action: "align node versions", default_priority: "p1", default_type: "chore", default_effort: "m", labels: &["maintenance", "infrastructure"], external_tool: "kubectl get nodes -o wide; compare node versions across cluster" },
+    // Observability (121-130)
+    MaintenanceRule { id: 121, title: "Missing Metrics", category: "observability", detection: "service endpoints without metrics instrumentation", action: "add metrics collection", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "observability"], external_tool: "review service endpoints for metrics instrumentation; check Prometheus targets" },
+    MaintenanceRule { id: 122, title: "Broken Alerts", category: "observability", detection: "alert rules referencing missing metrics", action: "fix alert configuration", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "observability"], external_tool: "promtool check rules; review alert rule YAML for missing metric references" },
+    MaintenanceRule { id: 123, title: "Missing Distributed Tracing", category: "observability", detection: "services without trace propagation", action: "add trace instrumentation", default_priority: "p1", default_type: "code", default_effort: "m", labels: &["maintenance", "observability"], external_tool: "review code for trace context propagation (OpenTelemetry, Jaeger, Zipkin)" },
+    MaintenanceRule { id: 124, title: "Log Retention Overflow", category: "observability", detection: "log retention exceeding storage policy", action: "adjust retention policy", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "observability"], external_tool: "check log retention policies; du -sh log storage; cloud logging config" },
+    MaintenanceRule { id: 125, title: "Missing Uptime Checks", category: "observability", detection: "production endpoints without health monitoring", action: "add uptime checks", default_priority: "p1", default_type: "chore", default_effort: "s", labels: &["maintenance", "observability"], external_tool: "review uptime monitoring config (Pingdom, UptimeRobot, cloud health checks)" },
+    MaintenanceRule { id: 126, title: "Alert Fatigue Detection", category: "observability", detection: "high volume of non-actionable alerts", action: "tune alert thresholds", default_priority: "p2", default_type: "chore", default_effort: "m", labels: &["maintenance", "observability"], external_tool: "review alert history for frequency; check PagerDuty/Opsgenie alert volume" },
+    MaintenanceRule { id: 127, title: "Missing Error Classification", category: "observability", detection: "errors logged without categorization", action: "add error classification", default_priority: "p2", default_type: "code", default_effort: "m", labels: &["maintenance", "observability"], external_tool: "review error logging for categorization (error codes, error types)" },
+    MaintenanceRule { id: 128, title: "Inconsistent Log Schema", category: "observability", detection: "log format varies across services", action: "standardize log schema", default_priority: "p2", default_type: "chore", default_effort: "m", labels: &["maintenance", "observability"], external_tool: "compare log formats across services; check structured logging config" },
+    MaintenanceRule { id: 129, title: "Missing Service Map", category: "observability", detection: "no service dependency map available", action: "generate service map", default_priority: "p2", default_type: "docs", default_effort: "m", labels: &["maintenance", "observability"], external_tool: "review service dependencies; generate from traces or config (Kiali, Jaeger)" },
+    MaintenanceRule { id: 130, title: "Outdated Dashboards", category: "observability", detection: "dashboards referencing deprecated metrics", action: "update dashboards", default_priority: "p2", default_type: "chore", default_effort: "s", labels: &["maintenance", "observability"], external_tool: "review Grafana/Datadog dashboards for deprecated metric references" },
+    // Testing (131-140)
+    MaintenanceRule { id: 131, title: "Failing Tests", category: "testing", detection: "test suite has persistent failures", action: "fix failing tests", default_priority: "p0", default_type: "tests", default_effort: "m", labels: &["maintenance", "testing"], external_tool: "run test suite and check exit code; review CI pipeline history for failures" },
+    MaintenanceRule { id: 132, title: "Flaky Tests", category: "testing", detection: "tests with intermittent pass/fail", action: "stabilize flaky tests", default_priority: "p1", default_type: "tests", default_effort: "m", labels: &["maintenance", "testing"], external_tool: "run tests multiple times; check CI history for intermittent failures" },
+    MaintenanceRule { id: 133, title: "Missing Regression Tests", category: "testing", detection: "recent bug fixes without regression tests", action: "add regression tests", default_priority: "p1", default_type: "tests", default_effort: "m", labels: &["maintenance", "testing"], external_tool: "review recent bug-fix commits for associated test additions" },
+    MaintenanceRule { id: 134, title: "Low Coverage Modules", category: "testing", detection: "modules below coverage threshold", action: "add tests for low coverage areas", default_priority: "p2", default_type: "tests", default_effort: "m", labels: &["maintenance", "testing"], external_tool: "coverage run -m pytest; nyc; go test -cover; review coverage report" },
+    MaintenanceRule { id: 135, title: "Outdated Snapshot Tests", category: "testing", detection: "snapshot tests not updated after code changes", action: "update snapshot tests", default_priority: "p2", default_type: "tests", default_effort: "s", labels: &["maintenance", "testing"], external_tool: "jest --updateSnapshot --dry-run; check snapshot diff against code changes" },
+    MaintenanceRule { id: 136, title: "Slow Test Suite", category: "testing", detection: "test suite execution exceeds threshold", action: "optimize slow tests", default_priority: "p2", default_type: "tests", default_effort: "m", labels: &["maintenance", "testing"], external_tool: "time test suite execution; pytest --durations=10; jest --verbose" },
+    MaintenanceRule { id: 137, title: "Missing Integration Tests", category: "testing", detection: "critical paths without integration test coverage", action: "add integration tests", default_priority: "p1", default_type: "tests", default_effort: "l", labels: &["maintenance", "testing"], external_tool: "review critical user paths for integration test coverage" },
+    MaintenanceRule { id: 138, title: "Broken CI Pipeline", category: "testing", detection: "CI pipeline failing on main branch", action: "fix CI pipeline", default_priority: "p0", default_type: "tests", default_effort: "m", labels: &["maintenance", "testing"], external_tool: "check CI pipeline status on main branch; review recent CI logs" },
+    MaintenanceRule { id: 139, title: "Missing Edge Case Tests", category: "testing", detection: "boundary conditions untested", action: "add edge case tests", default_priority: "p2", default_type: "tests", default_effort: "m", labels: &["maintenance", "testing"], external_tool: "review test cases for boundary values, null inputs, empty collections" },
+    MaintenanceRule { id: 140, title: "Inconsistent Test Data", category: "testing", detection: "test fixtures with hardcoded or stale data", action: "standardize test data", default_priority: "p2", default_type: "tests", default_effort: "s", labels: &["maintenance", "testing"], external_tool: "review test fixtures for hardcoded dates, IDs, or stale data" },
+    // Docs (141-150)
+    MaintenanceRule { id: 141, title: "Outdated API Docs", category: "docs", detection: "API documentation does not match implementation", action: "update API documentation", default_priority: "p1", default_type: "docs", default_effort: "m", labels: &["maintenance", "docs"], external_tool: "diff API implementation against API docs; check OpenAPI spec freshness" },
+    MaintenanceRule { id: 142, title: "Broken Documentation Links", category: "docs", detection: "dead links in documentation", action: "fix broken links", default_priority: "p2", default_type: "docs", default_effort: "s", labels: &["maintenance", "docs"], external_tool: "" },
+    MaintenanceRule { id: 143, title: "Outdated Onboarding Docs", category: "docs", detection: "onboarding guide references removed features", action: "update onboarding documentation", default_priority: "p1", default_type: "docs", default_effort: "m", labels: &["maintenance", "docs"], external_tool: "review onboarding docs against current setup/install process" },
+    MaintenanceRule { id: 144, title: "Missing Architecture Diagram", category: "docs", detection: "no architecture diagram or diagram is outdated", action: "create or update architecture diagram", default_priority: "p2", default_type: "docs", default_effort: "m", labels: &["maintenance", "docs"], external_tool: "check for architecture diagrams in docs/; compare against current system" },
+    MaintenanceRule { id: 145, title: "Missing CLI Examples", category: "docs", detection: "CLI commands without usage examples", action: "add CLI usage examples", default_priority: "p2", default_type: "docs", default_effort: "s", labels: &["maintenance", "docs"], external_tool: "review CLI --help output against documentation examples" },
+    MaintenanceRule { id: 146, title: "Outdated Deployment Guide", category: "docs", detection: "deployment guide does not match current process", action: "update deployment guide", default_priority: "p1", default_type: "docs", default_effort: "m", labels: &["maintenance", "docs"], external_tool: "compare deployment docs against current deploy scripts/CI config" },
+    MaintenanceRule { id: 147, title: "Undocumented Endpoints", category: "docs", detection: "API endpoints without documentation", action: "document undocumented endpoints", default_priority: "p1", default_type: "docs", default_effort: "m", labels: &["maintenance", "docs"], external_tool: "list API routes and compare against documented endpoints" },
+    MaintenanceRule { id: 148, title: "Stale README", category: "docs", detection: "README last updated significantly before repo activity", action: "update README", default_priority: "p2", default_type: "docs", default_effort: "s", labels: &["maintenance", "docs"], external_tool: "" },
+    MaintenanceRule { id: 149, title: "Outdated SDK Docs", category: "docs", detection: "SDK documentation does not match current API", action: "update SDK documentation", default_priority: "p1", default_type: "docs", default_effort: "m", labels: &["maintenance", "docs"], external_tool: "diff SDK methods against API documentation; check SDK version alignment" },
+    MaintenanceRule { id: 150, title: "Missing Changelog", category: "docs", detection: "no changelog or changelog not updated for recent releases", action: "update changelog", default_priority: "p2", default_type: "docs", default_effort: "s", labels: &["maintenance", "docs"], external_tool: "check CHANGELOG.md last entry date vs latest release tag" },
+];
+
+// Built-in scanner IDs (rules that have built-in detection logic)
+const BUILTIN_SCANNER_IDS: &[i32] = &[2, 6, 15, 18, 42, 48, 142, 148];
 
 fn root_version_components() -> Result<(u64, u64, String)> {
     let raw = option_env!("MT_ROOT_VERSION").ok_or_else(|| anyhow!("missing MT_ROOT_VERSION build metadata"))?;
@@ -2126,6 +2363,960 @@ fn cmd_version(as_json: bool) -> Result<i32> {
     Ok(0)
 }
 
+// ---------------------------------------------------------------------------
+// Maintain command group
+// ---------------------------------------------------------------------------
+
+fn filter_maintenance_rules(categories: &[String], rule_ids: &[i32]) -> Vec<&'static MaintenanceRule> {
+    let mut rules: Vec<&MaintenanceRule> = MAINTENANCE_RULES.iter().collect();
+    if !categories.is_empty() {
+        rules.retain(|r| categories.iter().any(|c| c == r.category));
+    }
+    if !rule_ids.is_empty() {
+        rules.retain(|r| rule_ids.contains(&r.id));
+    }
+    rules
+}
+
+fn has_builtin_scanner(rule_id: i32) -> bool {
+    BUILTIN_SCANNER_IDS.contains(&rule_id)
+}
+
+const DEFAULT_MAINTAIN_CONFIG: &str = r#"# tickets/maintain.yaml
+# Enable/disable categories and configure external tools for mt maintain scan.
+
+# Global settings
+settings:
+  log_file: tickets/maintain.log
+  timeout: 60
+  enabled: true
+
+# Per-category tool configuration
+# Set enabled: true and provide the command for your stack.
+# Use {repo} as placeholder for the repository root path.
+
+security:
+  cve_scanner:
+    enabled: false
+    # command: pip-audit --format=json
+  secret_scanner:
+    enabled: false
+    # command: gitleaks detect --source={repo} --report-format=json --no-git
+  ssl_check:
+    enabled: false
+
+deps:
+  outdated_check:
+    enabled: false
+  license_check:
+    enabled: false
+  unused_deps:
+    enabled: false
+
+code_health:
+  complexity:
+    enabled: false
+  linter:
+    enabled: false
+  formatter_check:
+    enabled: false
+  type_check:
+    enabled: false
+
+performance:
+  profiler:
+    enabled: false
+  bundle_size:
+    enabled: false
+
+database:
+  migration_check:
+    enabled: false
+  query_analyzer:
+    enabled: false
+
+infrastructure:
+  container_scan:
+    enabled: false
+  k8s_health:
+    enabled: false
+  terraform_drift:
+    enabled: false
+
+observability:
+  prometheus_check:
+    enabled: false
+  alert_check:
+    enabled: false
+
+testing:
+  coverage:
+    enabled: false
+  test_runner:
+    enabled: false
+
+documentation:
+  link_checker:
+    enabled: false
+  openapi_diff:
+    enabled: false
+"#;
+
+fn detect_project_stack(repo: &Path) -> BTreeMap<String, bool> {
+    let checks: &[(&str, &[&str])] = &[
+        ("python", &["pyproject.toml", "setup.py", "requirements.txt", "Pipfile"]),
+        ("node", &["package.json"]),
+        ("rust", &["Cargo.toml"]),
+        ("go", &["go.mod"]),
+        ("docker", &["Dockerfile"]),
+        ("terraform", &["main.tf"]),
+        ("k8s", &["k8s", "kubernetes"]),
+    ];
+    let mut detected = BTreeMap::new();
+    for &(stack, markers) in checks {
+        for marker in markers {
+            if repo.join(marker).exists() {
+                detected.insert(stack.to_string(), true);
+                break;
+            }
+        }
+    }
+    detected
+}
+
+fn generate_detected_config(repo: &Path) -> String {
+    let stacks = detect_project_stack(repo);
+    let stack_names: Vec<&str> = stacks.keys().map(|s| s.as_str()).collect();
+    let mut lines = vec![
+        "# tickets/maintain.yaml".to_string(),
+        "# Auto-generated by mt maintain init-config --detect".to_string(),
+        format!("# Detected stacks: {}", if stack_names.is_empty() { "none".to_string() } else { stack_names.join(", ") }),
+        String::new(),
+        "settings:".to_string(),
+        "  log_file: tickets/maintain.log".to_string(),
+        "  timeout: 60".to_string(),
+        "  enabled: true".to_string(),
+        String::new(),
+    ];
+
+    if stacks.contains_key("python") {
+        lines.extend(["security:", "  cve_scanner:", "    enabled: true", "    command: pip-audit --format=json",
+            "  secret_scanner:", "    enabled: true", "    command: gitleaks detect --source={repo} --report-format=json --no-git", "",
+            "deps:", "  outdated_check:", "    enabled: true", "    command: pip list --outdated --format=json", "",
+            "code_health:", "  linter:", "    enabled: true", "    command: pylint {repo} --output-format=json --exit-zero",
+            "  formatter_check:", "    enabled: true", "    command: black --check {repo} --quiet", "",
+            "testing:", "  test_runner:", "    enabled: true", "    command: pytest {repo} --tb=short -q",
+            "  coverage:", "    enabled: true", "    command: coverage run -m pytest {repo} -q && coverage json -o /dev/stdout", "",
+        ].iter().map(|s| s.to_string()));
+    } else if stacks.contains_key("node") {
+        lines.extend(["security:", "  cve_scanner:", "    enabled: true", "    command: npm audit --json",
+            "  secret_scanner:", "    enabled: true", "    command: gitleaks detect --source={repo} --report-format=json --no-git", "",
+            "deps:", "  outdated_check:", "    enabled: true", "    command: npm outdated --json", "",
+            "code_health:", "  linter:", "    enabled: true", "    command: eslint src --format=json",
+            "  formatter_check:", "    enabled: true", "    command: \"prettier --check 'src/**/*.{ts,tsx,js}'\"", "",
+            "testing:", "  test_runner:", "    enabled: true", "    command: npm test -- --json",
+            "  coverage:", "    enabled: true", "    command: nyc --reporter=json npm test", "",
+        ].iter().map(|s| s.to_string()));
+    } else if stacks.contains_key("rust") {
+        lines.extend(["security:", "  cve_scanner:", "    enabled: true", "    command: cargo audit --json",
+            "  secret_scanner:", "    enabled: true", "    command: gitleaks detect --source={repo} --report-format=json --no-git", "",
+            "deps:", "  outdated_check:", "    enabled: true", "    command: cargo outdated --format=json", "",
+            "code_health:", "  formatter_check:", "    enabled: true", "    command: cargo fmt --check", "",
+            "testing:", "  test_runner:", "    enabled: true", "    command: cargo test --message-format=json", "",
+        ].iter().map(|s| s.to_string()));
+    } else if stacks.contains_key("go") {
+        lines.extend(["security:", "  cve_scanner:", "    enabled: true", "    command: govulncheck ./...",
+            "  secret_scanner:", "    enabled: true", "    command: gitleaks detect --source={repo} --report-format=json --no-git", "",
+            "testing:", "  test_runner:", "    enabled: true", "    command: go test ./...",
+            "  coverage:", "    enabled: true", "    command: go test -coverprofile=coverage.out ./...", "",
+        ].iter().map(|s| s.to_string()));
+    } else {
+        lines.extend(["security:", "  secret_scanner:", "    enabled: false",
+            "    # command: gitleaks detect --source={repo} --report-format=json --no-git", "",
+        ].iter().map(|s| s.to_string()));
+    }
+
+    if stacks.contains_key("docker") {
+        lines.extend(["infrastructure:", "  container_scan:", "    enabled: true",
+            "    command: trivy image --format=json", "",
+        ].iter().map(|s| s.to_string()));
+    }
+    if stacks.contains_key("terraform") {
+        lines.extend(["infrastructure:", "  terraform_drift:", "    enabled: true",
+            "    command: terraform plan -detailed-exitcode -json", "",
+        ].iter().map(|s| s.to_string()));
+    }
+
+    lines.extend(["documentation:", "  link_checker:", "    enabled: false",
+        "    # command: markdown-link-check {repo}/docs/**/*.md --json", "",
+    ].iter().map(|s| s.to_string()));
+
+    lines.join("\n") + "\n"
+}
+
+fn load_maintain_config(repo: &Path) -> Mapping {
+    let config_path = repo.join("tickets").join("maintain.yaml");
+    if !config_path.exists() {
+        return Mapping::new();
+    }
+    match fs::read_to_string(&config_path) {
+        Ok(text) => match serde_yaml::from_str::<Value>(&text) {
+            Ok(Value::Mapping(m)) => m,
+            _ => Mapping::new(),
+        },
+        Err(_) => Mapping::new(),
+    }
+}
+
+fn get_config_log_path(repo: &Path, config: &Mapping) -> Option<PathBuf> {
+    let settings = config.get(Value::String("settings".to_string()))?.as_mapping()?;
+    let log_file = settings.get(Value::String("log_file".to_string()))?.as_str()?;
+    Some(repo.join(log_file))
+}
+
+fn get_config_timeout(config: &Mapping) -> u64 {
+    config.get(Value::String("settings".to_string()))
+        .and_then(|v| v.as_mapping())
+        .and_then(|s| s.get(Value::String("timeout".to_string())))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(60)
+}
+
+const CONFIG_CATEGORY_MAP: &[(&str, &str)] = &[
+    ("security", "security"), ("deps", "deps"), ("code_health", "code-health"),
+    ("performance", "performance"), ("database", "database"), ("infrastructure", "infrastructure"),
+    ("observability", "observability"), ("testing", "testing"), ("documentation", "docs"),
+];
+
+const CONFIG_TOOL_RULE_MAP: &[(&str, &[i32])] = &[
+    ("cve_scanner", &[1, 25]), ("secret_scanner", &[2, 6]), ("ssl_check", &[3]),
+    ("outdated_check", &[21]), ("license_check", &[31]), ("unused_deps", &[30]),
+    ("complexity", &[41]), ("linter", &[44, 45, 47]), ("formatter_check", &[53]),
+    ("type_check", &[55]), ("profiler", &[63]), ("bundle_size", &[29]),
+    ("migration_check", &[89]), ("query_analyzer", &[61]), ("container_scan", &[101]),
+    ("k8s_health", &[106]), ("terraform_drift", &[117]), ("prometheus_check", &[121]),
+    ("alert_check", &[122]), ("coverage", &[134]), ("test_runner", &[131]),
+    ("link_checker", &[142]), ("openapi_diff", &[141]),
+];
+
+struct EnabledTool {
+    name: String,
+    command: String,
+    rule_ids: Vec<i32>,
+}
+
+fn get_enabled_external_tools(config: &Mapping) -> Vec<EnabledTool> {
+    let mut tools = Vec::new();
+    for &(cat_key, _cat_slug) in CONFIG_CATEGORY_MAP {
+        let cat_config = match config.get(Value::String(cat_key.to_string())) {
+            Some(Value::Mapping(m)) => m,
+            _ => continue,
+        };
+        for (tool_key, tool_val) in cat_config {
+            let tool_name = match tool_key.as_str() { Some(s) => s, None => continue };
+            let tool_conf = match tool_val.as_mapping() { Some(m) => m, None => continue };
+            let enabled = tool_conf.get(Value::String("enabled".to_string()))
+                .and_then(|v| v.as_bool()).unwrap_or(false);
+            let command = tool_conf.get(Value::String("command".to_string()))
+                .and_then(|v| v.as_str()).unwrap_or("");
+            if enabled && !command.is_empty() {
+                let rule_ids = CONFIG_TOOL_RULE_MAP.iter()
+                    .find(|(name, _)| *name == tool_name)
+                    .map(|(_, ids)| ids.to_vec())
+                    .unwrap_or_default();
+                tools.push(EnabledTool {
+                    name: tool_name.to_string(),
+                    command: command.to_string(),
+                    rule_ids,
+                });
+            }
+        }
+    }
+    tools
+}
+
+fn log_tool_run(log_path: &Path, rule_id: i32, tool_name: &str, status: &str, duration_secs: f64, findings: usize) {
+    let ts = Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    let mut line = format!("{ts}  SCAN  rule={rule_id:<4} tool={tool_name:<16} status={status:<5} duration={duration_secs:.1}s");
+    if status == "fail" {
+        line.push_str(&format!("  findings={findings}"));
+    }
+    if let Some(parent) = log_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = OpenOptions::new().create(true).append(true).open(log_path)
+        .and_then(|mut f| { use std::io::Write; writeln!(f, "{line}") });
+}
+
+fn run_external_tool(command: &str, repo: &Path, _timeout_secs: u64) -> (i32, String, String) {
+    let cmd = command.replace("{repo}", &repo.display().to_string());
+    match std::process::Command::new("sh")
+        .args(["-c", &cmd])
+        .current_dir(repo)
+        .output()
+    {
+        Ok(output) => {
+            let code = output.status.code().unwrap_or(-1);
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            (code, stdout, stderr)
+        }
+        Err(e) => (-1, String::new(), format!("{e}")),
+    }
+}
+
+fn source_extensions() -> BTreeSet<&'static str> {
+    [".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".c", ".h",
+     ".cpp", ".java", ".rb", ".sh", ".bash", ".zsh", ".yaml", ".yml",
+     ".toml", ".cfg", ".ini", ".json", ".xml", ".zig"].iter().cloned().collect()
+}
+
+fn skip_dirs() -> BTreeSet<&'static str> {
+    [".git", "node_modules", "__pycache__", ".venv", "venv",
+     "target", "zig-out", "zig-cache", "build", "dist", ".tox"].iter().cloned().collect()
+}
+
+fn source_files(repo: &Path) -> Vec<PathBuf> {
+    let exts = source_extensions();
+    let skip = skip_dirs();
+    let mut results = Vec::new();
+    fn walk(dir: &Path, exts: &BTreeSet<&str>, skip: &BTreeSet<&str>, results: &mut Vec<PathBuf>) {
+        let entries = match fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if !skip.contains(name) { walk(&path, exts, skip, results); }
+                }
+            } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                let dotted = format!(".{ext}");
+                if exts.contains(dotted.as_str()) { results.push(path); }
+            }
+        }
+    }
+    walk(repo, &exts, &skip, &mut results);
+    results
+}
+
+fn scan_exposed_secrets(repo: &Path) -> Vec<(String, usize, String)> {
+    let patterns = [
+        (Regex::new(r"AKIA[0-9A-Z]{16}").unwrap(), "AWS access key pattern"),
+        (Regex::new(r#"password\s*=\s*['"][^'"]{3,}['"]"#).unwrap(), "hardcoded password"),
+        (Regex::new(r"-----BEGIN\s+(RSA|DSA|EC|OPENSSH)?\s*PRIVATE KEY-----").unwrap(), "private key"),
+        (Regex::new(r#"secret_key\s*=\s*['"][^'"]{3,}['"]"#).unwrap(), "hardcoded secret_key"),
+    ];
+    let mut findings = Vec::new();
+    for path in source_files(repo) {
+        let content = match fs::read_to_string(&path) { Ok(c) => c, Err(_) => continue };
+        let rel = path.strip_prefix(repo).unwrap_or(&path).display().to_string();
+        for (lineno, line) in content.lines().enumerate() {
+            for (pat, desc) in &patterns {
+                if pat.is_match(line) {
+                    findings.push((rel.clone(), lineno + 1, format!("{desc} detected")));
+                    break;
+                }
+            }
+        }
+    }
+    findings
+}
+
+fn scan_container_root(repo: &Path) -> Vec<(String, usize, String)> {
+    let mut findings = Vec::new();
+    let user_re = Regex::new(r"(?m)^\s*USER\s+\S+").unwrap();
+    fn find_dockerfiles(dir: &Path, results: &mut Vec<PathBuf>) {
+        let entries = match fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name != ".git" && name != "node_modules" { find_dockerfiles(&path, results); }
+                }
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("Dockerfile") { results.push(path); }
+            }
+        }
+    }
+    let mut dockerfiles = Vec::new();
+    find_dockerfiles(repo, &mut dockerfiles);
+    for df in dockerfiles {
+        let content = match fs::read_to_string(&df) { Ok(c) => c, Err(_) => continue };
+        if content.contains("FROM ") && !user_re.is_match(&content) {
+            let rel = df.strip_prefix(repo).unwrap_or(&df).display().to_string();
+            findings.push((rel, 0, "Dockerfile missing USER directive (runs as root)".to_string()));
+        }
+    }
+    findings
+}
+
+fn scan_exposed_env(repo: &Path) -> Vec<(String, usize, String)> {
+    match std::process::Command::new("git")
+        .args(["ls-files", "--error-unmatch", ".env"])
+        .current_dir(repo)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            vec![(".env".to_string(), 0, ".env file is tracked in git".to_string())]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn scan_large_files(repo: &Path) -> Vec<(String, usize, String)> {
+    let threshold = 1000;
+    let mut findings = Vec::new();
+    for path in source_files(repo) {
+        let content = match fs::read_to_string(&path) { Ok(c) => c, Err(_) => continue };
+        let count = content.lines().count();
+        if count > threshold {
+            let rel = path.strip_prefix(repo).unwrap_or(&path).display().to_string();
+            findings.push((rel, 0, format!("{count} lines (threshold: {threshold})")));
+        }
+    }
+    findings
+}
+
+fn scan_todo_density(repo: &Path) -> Vec<(String, usize, String)> {
+    let todo_re = Regex::new(r"(?i)\b(TODO|FIXME|HACK|XXX)\b").unwrap();
+    let threshold = 10;
+    let mut findings = Vec::new();
+    for path in source_files(repo) {
+        let content = match fs::read_to_string(&path) { Ok(c) => c, Err(_) => continue };
+        let count = content.lines().filter(|l| todo_re.is_match(l)).count();
+        if count >= threshold {
+            let rel = path.strip_prefix(repo).unwrap_or(&path).display().to_string();
+            findings.push((rel, 0, format!("{count} TODO/FIXME/HACK comments")));
+        }
+    }
+    findings
+}
+
+fn scan_broken_doc_links(repo: &Path) -> Vec<(String, usize, String)> {
+    let link_re = Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").unwrap();
+    let mut findings = Vec::new();
+    fn find_md_files(dir: &Path, results: &mut Vec<PathBuf>) {
+        let entries = match fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name != ".git" && name != "node_modules" { find_md_files(&path, results); }
+                }
+            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                results.push(path);
+            }
+        }
+    }
+    let mut md_files = Vec::new();
+    find_md_files(repo, &mut md_files);
+    for md in md_files {
+        let content = match fs::read_to_string(&md) { Ok(c) => c, Err(_) => continue };
+        let rel = md.strip_prefix(repo).unwrap_or(&md).display().to_string();
+        let fdir = md.parent().unwrap_or(repo);
+        for (lineno, line) in content.lines().enumerate() {
+            for cap in link_re.captures_iter(line) {
+                let target = &cap[2];
+                if target.starts_with("http://") || target.starts_with("https://") || target.starts_with('#') || target.starts_with("mailto:") {
+                    continue;
+                }
+                let clean = target.split('#').next().unwrap_or("").split('?').next().unwrap_or("");
+                if clean.is_empty() { continue; }
+                let full = fdir.join(clean);
+                if !full.exists() {
+                    findings.push((rel.clone(), lineno + 1, format!("broken link to {clean}")));
+                }
+            }
+        }
+    }
+    findings
+}
+
+fn scan_stale_readme(repo: &Path) -> Vec<(String, usize, String)> {
+    let readme = repo.join("README.md");
+    if !readme.exists() {
+        return vec![("README.md".to_string(), 0, "README.md does not exist".to_string())];
+    }
+    let readme_mtime = match fs::metadata(&readme).and_then(|m| m.modified()) {
+        Ok(t) => t, Err(_) => return Vec::new(),
+    };
+    let mut latest = std::time::SystemTime::UNIX_EPOCH;
+    for path in source_files(repo) {
+        if let Ok(mt) = fs::metadata(&path).and_then(|m| m.modified()) {
+            if mt > latest { latest = mt; }
+        }
+    }
+    if latest == std::time::SystemTime::UNIX_EPOCH { return Vec::new(); }
+    if let Ok(diff) = latest.duration_since(readme_mtime) {
+        let days = diff.as_secs() / 86400;
+        if days > 90 {
+            return vec![("README.md".to_string(), 0, format!("README.md is {days} days behind latest source change"))];
+        }
+    }
+    Vec::new()
+}
+
+fn run_builtin_scanner(rule_id: i32, repo: &Path) -> Option<Vec<(String, usize, String)>> {
+    match rule_id {
+        2 | 6 => Some(scan_exposed_secrets(repo)),
+        15 => Some(scan_container_root(repo)),
+        18 => Some(scan_exposed_env(repo)),
+        42 => Some(scan_large_files(repo)),
+        48 => Some(scan_todo_density(repo)),
+        142 => Some(scan_broken_doc_links(repo)),
+        148 => Some(scan_stale_readme(repo)),
+        _ => None,
+    }
+}
+
+fn scan_rule_with_config(
+    repo: &Path, rule: &MaintenanceRule, config: &Mapping, log_path: Option<&Path>,
+) -> serde_json::Value {
+    use std::time::Instant;
+
+    // Try built-in scanner
+    if let Some(findings) = run_builtin_scanner(rule.id, repo) {
+        let start = Instant::now();
+        let duration = start.elapsed().as_secs_f64();
+        let status = if findings.is_empty() { "pass" } else { "fail" };
+        if let Some(lp) = log_path {
+            log_tool_run(lp, rule.id, "built-in", status, duration, findings.len());
+        }
+        let findings_json: Vec<serde_json::Value> = findings.iter().map(|(file, line, detail)| {
+            json!({"file": file, "line": line, "detail": detail})
+        }).collect();
+        return json!({
+            "rule_id": rule.id, "status": status, "title": rule.title,
+            "category": rule.category, "findings": findings_json,
+        });
+    }
+
+    // Try external tool
+    let ext_tools = get_enabled_external_tools(config);
+    for tool in &ext_tools {
+        if tool.rule_ids.contains(&rule.id) {
+            let timeout = get_config_timeout(config);
+            let start = Instant::now();
+            let (code, stdout, stderr) = run_external_tool(&tool.command, repo, timeout);
+            let duration = start.elapsed().as_secs_f64();
+            if code == 0 {
+                if let Some(lp) = log_path {
+                    log_tool_run(lp, rule.id, &tool.name, "pass", duration, 0);
+                }
+                return json!({
+                    "rule_id": rule.id, "status": "pass", "title": rule.title,
+                    "category": rule.category, "findings": [],
+                });
+            } else {
+                let detail = if !stdout.is_empty() { &stdout[..stdout.len().min(200)] } else { &stderr[..stderr.len().min(200)] };
+                if let Some(lp) = log_path {
+                    log_tool_run(lp, rule.id, &tool.name, "fail", duration, 1);
+                }
+                return json!({
+                    "rule_id": rule.id, "status": "fail", "title": rule.title,
+                    "category": rule.category,
+                    "findings": [{"file": "", "line": 0, "detail": format!("external tool '{}' reported issue: {}", tool.name, detail.trim())}],
+                });
+            }
+        }
+    }
+
+    // No scanner
+    let mut reason = "no built-in scanner".to_string();
+    if !rule.external_tool.is_empty() {
+        reason.push_str(&format!("; try: {}", rule.external_tool));
+    }
+    if let Some(lp) = log_path {
+        log_tool_run(lp, rule.id, "none", "skip", 0.0, 0);
+    }
+    json!({
+        "rule_id": rule.id, "status": "skip", "title": rule.title,
+        "category": rule.category, "reason": reason, "findings": [],
+    })
+}
+
+fn format_suggestion_body(rule: &MaintenanceRule) -> String {
+    let tool_section = if rule.external_tool.is_empty() {
+        String::new()
+    } else {
+        format!("\n## External Tool\n```\n{}\n```\n", rule.external_tool)
+    };
+    format!("## Goal\nInvestigate and remediate: {title}\n\n## Detection Heuristic\n{detection}\n{tool}\n## Recommended Action\n{action}\n\n## Acceptance Criteria\n- [ ] Run detection heuristic against codebase\n- [ ] Fix any issues found, or close ticket if none exist\n- [ ] Verify fix passes CI\n\n## Notes\nAuto-generated by `mt maintain create` (rule {id}, category: {cat})\n",
+        title = rule.title, detection = rule.detection, tool = tool_section,
+        action = rule.action, id = rule.id, cat = rule.category)
+}
+
+fn format_finding_body(rule: &MaintenanceRule, findings: &[serde_json::Value]) -> String {
+    let mut lines = Vec::new();
+    for f in findings {
+        let file = f["file"].as_str().unwrap_or("");
+        let line = f["line"].as_u64().unwrap_or(0);
+        let detail = f["detail"].as_str().unwrap_or("");
+        let loc = if line > 0 { format!("line {line}") } else { "file".to_string() };
+        lines.push(format!("- `{file}` ({loc}): {detail}"));
+    }
+    format!("## Goal\nFix detected issue: {title}\n\n## Findings\n{findings}\n\n## Recommended Action\n{action}\n\n## Acceptance Criteria\n- [ ] Address all findings listed above\n- [ ] Verify fix passes CI\n\n## Notes\nAuto-detected by `mt maintain scan` (rule {id}, category: {cat})\n",
+        title = rule.title, findings = lines.join("\n"), action = rule.action,
+        id = rule.id, cat = rule.category)
+}
+
+fn collect_existing_maint_tags(repo: &Path) -> BTreeSet<String> {
+    let mut tags = BTreeSet::new();
+    if let Ok(paths) = iter_ticket_files(&tickets_dir(repo)) {
+        for path in paths {
+            if let Ok((mut meta, _body)) = read_ticket(&path) {
+                normalize_meta(&mut meta);
+                let status = map_get_status(&meta);
+                if status == "done" { continue; }
+                for tag in map_get_string_array(&meta, "tags") {
+                    if tag.starts_with("maint-rule-") {
+                        tags.insert(tag);
+                    }
+                }
+            }
+        }
+    }
+    tags
+}
+
+fn cmd_maintain_init_config(force: bool, detect: bool) -> Result<i32> {
+    let cwd = std::env::current_dir()?;
+    let repo = find_repo_root(&cwd);
+    let tdir = tickets_dir(&repo);
+    fs::create_dir_all(&tdir)?;
+    let config_path = tdir.join("maintain.yaml");
+    if config_path.exists() && !force {
+        eprintln!("config already exists: {}", config_path.display());
+        eprintln!("use --force to overwrite");
+        return Ok(1);
+    }
+    let content = if detect {
+        let stacks = detect_project_stack(&repo);
+        let names: Vec<&str> = stacks.keys().map(|s| s.as_str()).collect();
+        eprintln!("detected stacks: {}", if names.is_empty() { "none".to_string() } else { names.join(", ") });
+        generate_detected_config(&repo)
+    } else {
+        DEFAULT_MAINTAIN_CONFIG.to_string()
+    };
+    fs::write(&config_path, &content)?;
+    println!("{}", config_path.display());
+    Ok(0)
+}
+
+fn cmd_maintain_doctor() -> Result<i32> {
+    let cwd = std::env::current_dir()?;
+    let repo = find_repo_root(&cwd);
+    let config = load_maintain_config(&repo);
+    if config.is_empty() {
+        eprintln!("no tickets/maintain.yaml found. run: mt maintain init-config");
+        return Ok(2);
+    }
+    let ext_tools = get_enabled_external_tools(&config);
+    if ext_tools.is_empty() {
+        eprintln!("no external tools enabled in maintain.yaml");
+        return Ok(0);
+    }
+    let mut ok_count = 0;
+    let mut fail_count = 0;
+    for tool in &ext_tools {
+        let binary = tool.command.split_whitespace().next().unwrap_or("").replace("{repo}", "");
+        let binary = if binary.is_empty() { tool.command.split_whitespace().next().unwrap_or("").to_string() } else { binary };
+        match which::which(&binary) {
+            Ok(found) => {
+                println!("[OK]    {:<20} {} -> {}", tool.name, binary, found.display());
+                ok_count += 1;
+            }
+            Err(_) => {
+                println!("[MISS]  {:<20} {} -- not found on PATH", tool.name, binary);
+                fail_count += 1;
+            }
+        }
+    }
+    eprintln!("\n{} tool(s) checked: {} available, {} missing", ok_count + fail_count, ok_count, fail_count);
+    Ok(if fail_count > 0 { 1 } else { 0 })
+}
+
+fn cmd_maintain_list(categories: Vec<String>, rule_ids: Vec<i32>) -> Result<i32> {
+    let rules = filter_maintenance_rules(&categories, &rule_ids);
+    if rules.is_empty() {
+        eprintln!("no rules match the given filters.");
+        return Ok(1);
+    }
+    for rule in &rules {
+        let scanner_tag = if has_builtin_scanner(rule.id) { "built-in" } else { "external" };
+        println!("  {:3}  [{:<16}] {}  ({})", rule.id, rule.category, rule.title, scanner_tag);
+        println!("        detection: {}", rule.detection);
+        if !rule.external_tool.is_empty() {
+            println!("        tool: {}", rule.external_tool);
+        }
+    }
+    Ok(0)
+}
+
+fn cmd_maintain_scan(
+    mut categories: Vec<String>, rule_ids: Vec<i32>, all: bool, diff: bool,
+    format: String, profile: Option<String>, fix: bool,
+) -> Result<i32> {
+    if let Some(ref prof) = profile {
+        let profile_cats: Vec<String> = match prof.as_str() {
+            "ci" => vec!["security", "code-health", "testing"],
+            "nightly" => MAINTENANCE_CATEGORIES.to_vec(),
+            _ => { eprintln!("unknown profile: {prof}"); return Ok(2); }
+        }.iter().map(|s| s.to_string()).collect();
+        for cat in profile_cats {
+            if !categories.contains(&cat) { categories.push(cat); }
+        }
+    }
+    if categories.is_empty() && rule_ids.is_empty() && !all {
+        eprintln!("error: --category, --rule, --all, or --profile required for scanning.");
+        eprintln!("hint: mt maintain list  (to browse rules first)");
+        return Ok(2);
+    }
+    if all {
+        categories = MAINTENANCE_CATEGORIES.iter().map(|s| s.to_string()).collect();
+    }
+
+    let cwd = std::env::current_dir()?;
+    let repo = find_repo_root(&cwd);
+    let rules = filter_maintenance_rules(&categories, &rule_ids);
+    if rules.is_empty() {
+        eprintln!("no rules match the given filters.");
+        return Ok(1);
+    }
+
+    let config = load_maintain_config(&repo);
+    let log_path = get_config_log_path(&repo, &config);
+
+    let mut results: Vec<serde_json::Value> = rules.iter()
+        .map(|rule| scan_rule_with_config(&repo, rule, &config, log_path.as_deref()))
+        .collect();
+
+    // --diff
+    let last_scan_path = repo.join("tickets").join("maintain.last.json");
+    if diff {
+        let prev_results: Vec<serde_json::Value> = if last_scan_path.exists() {
+            fs::read_to_string(&last_scan_path).ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default()
+        } else { Vec::new() };
+        let prev_by_rule: BTreeMap<i64, &serde_json::Value> = prev_results.iter()
+            .filter_map(|r| r["rule_id"].as_i64().map(|id| (id, r)))
+            .collect();
+        let mut new_results = Vec::new();
+        for r in &results {
+            let rid = r["rule_id"].as_i64().unwrap_or(0);
+            match prev_by_rule.get(&rid) {
+                None => new_results.push(r.clone()),
+                Some(prev) if prev["status"] != r["status"] => new_results.push(r.clone()),
+                Some(prev) if r["status"] == "fail" && prev["status"] == "fail" => {
+                    let prev_details: BTreeSet<String> = prev["findings"].as_array()
+                        .map(|arr| arr.iter().map(|f| f.to_string()).collect())
+                        .unwrap_or_default();
+                    let new_findings: Vec<serde_json::Value> = r["findings"].as_array()
+                        .map(|arr| arr.iter().filter(|f| !prev_details.contains(&f.to_string())).cloned().collect())
+                        .unwrap_or_default();
+                    if !new_findings.is_empty() {
+                        let mut copy = r.clone();
+                        copy["findings"] = serde_json::Value::Array(new_findings);
+                        new_results.push(copy);
+                    }
+                }
+                _ => {}
+            }
+        }
+        results = new_results;
+        if results.is_empty() {
+            eprintln!("no new findings since last scan.");
+        }
+    }
+
+    // Save for future --diff
+    let full_results: Vec<serde_json::Value> = if diff {
+        rules.iter().map(|rule| scan_rule_with_config(&repo, rule, &config, None)).collect()
+    } else {
+        results.clone()
+    };
+    let _ = fs::write(&last_scan_path, serde_json::to_string_pretty(&full_results).unwrap_or_default());
+
+    // --fix
+    if fix {
+        let failed_rule_ids: BTreeSet<i64> = results.iter()
+            .filter(|r| r["status"] == "fail")
+            .filter_map(|r| r["rule_id"].as_i64())
+            .collect();
+        for &(cat_key, _) in CONFIG_CATEGORY_MAP {
+            if let Some(Value::Mapping(cat_config)) = config.get(Value::String(cat_key.to_string())) {
+                for (tool_key, tool_val) in cat_config {
+                    if let (Some(name), Some(conf)) = (tool_key.as_str(), tool_val.as_mapping()) {
+                        let fix_cmd = conf.get(Value::String("fix_command".to_string())).and_then(|v| v.as_str());
+                        if let Some(fix_cmd) = fix_cmd {
+                            let tool_rules: Vec<i32> = CONFIG_TOOL_RULE_MAP.iter()
+                                .find(|(n, _)| *n == name).map(|(_, ids)| ids.to_vec()).unwrap_or_default();
+                            if tool_rules.iter().any(|rid| failed_rule_ids.contains(&(*rid as i64))) {
+                                let cmd = fix_cmd.replace("{repo}", &repo.display().to_string());
+                                eprintln!("[FIX]  running: {cmd}");
+                                match std::process::Command::new("sh").args(["-c", &cmd]).current_dir(&repo).output() {
+                                    Ok(out) if out.status.success() => eprintln!("[FIX]  {name}: applied successfully"),
+                                    Ok(out) => eprintln!("[FIX]  {name}: fix command returned {}", out.status.code().unwrap_or(-1)),
+                                    Err(e) => eprintln!("[FIX]  {name}: {e}"),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Output
+    if format == "json" {
+        println!("{}", serde_json::to_string_pretty(&results).unwrap_or_default());
+    } else {
+        for r in &results {
+            let status = r["status"].as_str().unwrap_or("skip");
+            let rid = r["rule_id"].as_i64().unwrap_or(0);
+            let title = r["title"].as_str().unwrap_or("");
+            match status {
+                "fail" => {
+                    let count = r["findings"].as_array().map(|a| a.len()).unwrap_or(0);
+                    println!("[FAIL]  rule {:3}: {} -- {} finding(s)", rid, title, count);
+                    if let Some(arr) = r["findings"].as_array() {
+                        for f in arr {
+                            let file = f["file"].as_str().unwrap_or("");
+                            let line = f["line"].as_u64().unwrap_or(0);
+                            let detail = f["detail"].as_str().unwrap_or("");
+                            let loc = if line > 0 { format!(":{line}") } else { String::new() };
+                            println!("        {file}{loc}: {detail}");
+                        }
+                    }
+                }
+                "pass" => println!("[PASS]  rule {:3}: {} -- ok", rid, title),
+                _ => {
+                    let reason = r.get("reason").and_then(|v| v.as_str()).unwrap_or("no built-in scanner");
+                    println!("[SKIP]  rule {:3}: {} -- {}", rid, title, reason);
+                }
+            }
+        }
+    }
+
+    let fail_count = results.iter().filter(|r| r["status"] == "fail").count();
+    let pass_count = results.iter().filter(|r| r["status"] == "pass").count();
+    let skip_count = results.iter().filter(|r| r["status"] == "skip").count();
+    eprintln!("\n{} rule(s) scanned: {} failed, {} passed, {} skipped", results.len(), fail_count, pass_count, skip_count);
+    Ok(if fail_count > 0 { 1 } else { 0 })
+}
+
+fn cmd_maintain_create(
+    mut categories: Vec<String>, rule_ids: Vec<i32>, all: bool, dry_run: bool,
+    skip_scan: bool, priority_override: Option<String>, owner: Option<String>,
+) -> Result<i32> {
+    if categories.is_empty() && rule_ids.is_empty() && !all {
+        eprintln!("error: --category, --rule, or --all required.");
+        eprintln!("hint: mt maintain scan --category <cat>  (to scan first)");
+        return Ok(2);
+    }
+    if all {
+        categories = MAINTENANCE_CATEGORIES.iter().map(|s| s.to_string()).collect();
+    }
+
+    let cwd = std::env::current_dir()?;
+    let repo = find_repo_root(&cwd);
+    let tdir = tickets_dir(&repo);
+    fs::create_dir_all(&tdir)?;
+
+    let rules = filter_maintenance_rules(&categories, &rule_ids);
+    if rules.is_empty() {
+        eprintln!("no rules match the given filters.");
+        return Ok(1);
+    }
+
+    let config = load_maintain_config(&repo);
+    let log_path = get_config_log_path(&repo, &config);
+    let mut scan_results: BTreeMap<i32, serde_json::Value> = BTreeMap::new();
+    if !skip_scan {
+        for rule in &rules {
+            scan_results.insert(rule.id, scan_rule_with_config(&repo, rule, &config, log_path.as_deref()));
+        }
+    }
+
+    let existing_tags = collect_existing_maint_tags(&repo);
+
+    let mut created = 0;
+    let mut skipped_dedup = 0;
+    let mut skipped_pass = 0;
+    for rule in &rules {
+        let tag = format!("maint-rule-{}", rule.id);
+        if existing_tags.contains(&tag) {
+            skipped_dedup += 1;
+            continue;
+        }
+
+        let scan = scan_results.get(&rule.id);
+        if let Some(s) = scan {
+            if s["status"] == "pass" {
+                skipped_pass += 1;
+                continue;
+            }
+        }
+
+        let body = if let Some(s) = scan {
+            if s["status"] == "fail" {
+                if let Some(findings) = s["findings"].as_array() {
+                    if !findings.is_empty() {
+                        format_finding_body(rule, findings)
+                    } else {
+                        format_suggestion_body(rule)
+                    }
+                } else { format_suggestion_body(rule) }
+            } else { format_suggestion_body(rule) }
+        } else { format_suggestion_body(rule) };
+
+        if dry_run {
+            let label = if scan.map(|s| s["status"] == "fail").unwrap_or(false) { "findings" } else { "suggestion" };
+            println!("[dry-run] [{label}] [MAINT-{:03}] {}", rule.id, rule.title);
+            created += 1;
+            continue;
+        }
+
+        let tid = next_ticket_id_for_repo(&tdir)?;
+        let pri = priority_override.as_deref().unwrap_or(rule.default_priority);
+        let mut labels_vec: Vec<Value> = rule.labels.iter().map(|l| Value::String(l.to_string())).collect();
+        labels_vec.push(Value::String("auto-maintenance".to_string()));
+        let tags_vec = vec![
+            Value::String(format!("maint-rule-{}", rule.id)),
+            Value::String(format!("maint-cat-{}", rule.category)),
+        ];
+
+        let mut meta = Mapping::new();
+        meta.insert(Value::String("id".to_string()), Value::String(tid.clone()));
+        meta.insert(Value::String("title".to_string()), Value::String(format!("[MAINT-{:03}] {}", rule.id, rule.title)));
+        meta.insert(Value::String("status".to_string()), Value::String("ready".to_string()));
+        meta.insert(Value::String("priority".to_string()), Value::String(pri.to_string()));
+        meta.insert(Value::String("type".to_string()), Value::String(rule.default_type.to_string()));
+        meta.insert(Value::String("effort".to_string()), Value::String(rule.default_effort.to_string()));
+        meta.insert(Value::String("labels".to_string()), Value::Sequence(labels_vec));
+        meta.insert(Value::String("tags".to_string()), Value::Sequence(tags_vec));
+        let owner_val = match &owner {
+            Some(o) => Value::String(o.clone()),
+            None => Value::Null,
+        };
+        meta.insert(Value::String("owner".to_string()), owner_val);
+        meta.insert(Value::String("created".to_string()), Value::String(today_str()));
+        meta.insert(Value::String("updated".to_string()), Value::String(today_str()));
+        meta.insert(Value::String("depends_on".to_string()), Value::Sequence(Vec::new()));
+        meta.insert(Value::String("branch".to_string()), Value::Null);
+        normalize_meta(&mut meta);
+
+        let path = tdir.join(format!("{tid}.md"));
+        write_ticket(&path, &meta, &body)?;
+        println!("{}", path.display());
+        created += 1;
+    }
+
+    let would_be = if dry_run { "would be " } else { "" };
+    eprintln!("{created} ticket(s) {would_be}created, {skipped_dedup} skipped (duplicates), {skipped_pass} skipped (scan passed)");
+    Ok(0)
+}
+
 fn run() -> Result<i32> {
     let cli = Cli::parse();
     if cli.version || cli.command.is_none() {
@@ -2233,6 +3424,29 @@ fn run() -> Result<i32> {
             limit,
         } => cmd_report(db, summary, search, limit),
         Commands::Version { json } => cmd_version(json),
+        Commands::Maintain { subcmd } => match subcmd {
+            MaintainCmd::InitConfig { force, detect } => cmd_maintain_init_config(force, detect),
+            MaintainCmd::Doctor => cmd_maintain_doctor(),
+            MaintainCmd::List { category, rule } => cmd_maintain_list(category, rule),
+            MaintainCmd::Scan {
+                category,
+                rule,
+                all,
+                diff,
+                format,
+                profile,
+                fix,
+            } => cmd_maintain_scan(category, rule, all, diff, format, profile, fix),
+            MaintainCmd::Create {
+                category,
+                rule,
+                all,
+                dry_run,
+                skip_scan,
+                priority,
+                owner,
+            } => cmd_maintain_create(category, rule, all, dry_run, skip_scan, priority, owner),
+        },
     }
 }
 
