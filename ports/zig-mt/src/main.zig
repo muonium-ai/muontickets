@@ -2782,8 +2782,12 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(tickets_dir);
     if (!dirExists(tickets_dir)) return;
 
-    std.debug.print("ID       STATUS        PR TYPE     EF OWNER         TITLE  [LABELS]\n", .{});
-    std.debug.print("--------------------------------------------------------------------------------------------------------------\n", .{});
+    // Collect matching rows first so we can suppress the header when there are none.
+    var rows = try std.array_list.Managed([]u8).initCapacity(allocator, 16);
+    defer {
+        for (rows.items) |r| allocator.free(r);
+        rows.deinit();
+    }
 
     var dir = try std.fs.cwd().openDir(tickets_dir, .{ .iterate = true });
     defer dir.close();
@@ -2798,7 +2802,8 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
 
         if (frontmatterParseError(content)) |fm_err| {
             if (show_invalid) {
-                std.debug.print("{s}  PARSE_ERROR  {s}\n", .{ entry.name, fm_err });
+                const row = try std.fmt.allocPrint(allocator, "{s}  PARSE_ERROR  {s}\n", .{ entry.name, fm_err });
+                try rows.append(row);
             }
             continue;
         }
@@ -2837,7 +2842,16 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         }
         if (!labels_ok) continue;
 
-        std.debug.print("{s}  {s}  {s} {s} {s} {s}  {s}  {s}\n", .{ id, status, pr, tp, effort, owner, title, labels });
+        const row = try std.fmt.allocPrint(allocator, "{s}  {s}  {s} {s} {s} {s}  {s}  {s}\n", .{ id, status, pr, tp, effort, owner, title, labels });
+        try rows.append(row);
+    }
+
+    if (rows.items.len > 0) {
+        try printStdout(allocator, "ID       STATUS        PR TYPE     EF OWNER         TITLE  [LABELS]\n", .{});
+        try printStdout(allocator, "--------------------------------------------------------------------------------------------------------------\n", .{});
+        for (rows.items) |row| {
+            try std.fs.File.stdout().writeAll(row);
+        }
     }
 }
 
@@ -2857,7 +2871,7 @@ fn cmdShow(allocator: std.mem.Allocator, id: []const u8) !void {
         std.process.exit(2);
     };
     defer allocator.free(content);
-    std.debug.print("{s}", .{content});
+    try std.fs.File.stdout().writeAll(content);
 }
 
 pub fn main() !void {
