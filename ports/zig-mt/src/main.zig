@@ -85,42 +85,63 @@ const priorities = [_][]const u8{ "p0", "p1", "p2" };
 const ticket_types = [_][]const u8{ "spec", "code", "tests", "docs", "refactor", "chore" };
 
 const default_template =
-    \\\---
-    \\\id: T-000000
-    \\\title: Template: replace title
-    \\\status: ready
-    \\\priority: p1
-    \\\type: code
-    \\\effort: s
-    \\\labels: []
-    \\\tags: []
-    \\\owner: null
-    \\\created: 1970-01-01
-    \\\updated: 1970-01-01
-    \\\depends_on: []
-    \\\branch: null
-    \\\---
+    \\---
+    \\id: T-000000
+    \\title: Template: replace title
+    \\status: ready
+    \\priority: p1
+    \\type: code
+    \\effort: s
+    \\labels: []
+    \\tags: []
+    \\owner: null
+    \\created: 1970-01-01T00:00:00Z
+    \\updated: 1970-01-01T00:00:00Z
+    \\depends_on: []
+    \\branch: null
+    \\retry_count: 0
+    \\retry_limit: 3
+    \\allocated_to: null
+    \\allocated_at: null
+    \\lease_expires_at: null
+    \\last_error: null
+    \\last_attempted_at: null
+    \\---
     \\
-    \\\## Goal
-    \\\Write a single-sentence goal.
+    \\## Goal
+    \\Write a single-sentence goal.
     \\
-    \\\## Acceptance Criteria
-    \\\- [ ] Define clear, testable checks (2–5 items)
+    \\## Acceptance Criteria
+    \\- [ ] Define clear, testable checks (2–5 items)
     \\
-    \\\## Notes
+    \\## Notes
+    \\
+    \\## Agent Assignment
+    \\- Suggested owner: agent-name
+    \\- Suggested branch: feature/short-name
+    \\
+    \\## Implementation Plan
+    \\- [ ] Describe 2-4 concrete execution steps
+    \\- [ ] List test/validation commands to run
+    \\- [ ] Note any dependency handoff requirements
+    \\
+    \\## Queue Lifecycle (if allocated)
+    \\- [ ] Add progress with `mt comment <id> "..."`
+    \\- [ ] If blocked/failing, run `mt fail-task <id> --error "..."`
+    \\- [ ] On completion, move to `needs_review` then `done`
     \\
 ;
 
 const example_body =
-    \\\## Goal
-    \\\Replace this example with a real task.
+    \\## Goal
+    \\Replace this example with a real task.
     \\
-    \\\## Acceptance Criteria
-    \\\- [ ] Delete or edit this ticket
-    \\\- [ ] Create at least one real ticket with `mt new`
+    \\## Acceptance Criteria
+    \\- [ ] Delete or edit this ticket
+    \\- [ ] Create at least one real ticket with `mt new`
     \\
-    \\\## Notes
-    \\\This repository uses MuonTickets for agent-friendly coordination.
+    \\## Notes
+    \\This repository uses MuonTickets for agent-friendly coordination.
     \\
 ;
 
@@ -289,6 +310,13 @@ fn writeTicketFile(allocator: std.mem.Allocator, path: []const u8, id: []const u
         \\updated: {s}
         \\depends_on: []
         \\branch: null
+        \\retry_count: 0
+        \\retry_limit: 3
+        \\allocated_to: null
+        \\allocated_at: null
+        \\lease_expires_at: null
+        \\last_error: null
+        \\last_attempted_at: null
         \\---
         \\
         \\{s}
@@ -2782,8 +2810,12 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(tickets_dir);
     if (!dirExists(tickets_dir)) return;
 
-    std.debug.print("ID       STATUS        PR TYPE     EF OWNER         TITLE  [LABELS]\n", .{});
-    std.debug.print("--------------------------------------------------------------------------------------------------------------\n", .{});
+    // Collect matching rows first so we can suppress the header when there are none.
+    var rows = try std.array_list.Managed([]u8).initCapacity(allocator, 16);
+    defer {
+        for (rows.items) |r| allocator.free(r);
+        rows.deinit();
+    }
 
     var dir = try std.fs.cwd().openDir(tickets_dir, .{ .iterate = true });
     defer dir.close();
@@ -2798,7 +2830,8 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
 
         if (frontmatterParseError(content)) |fm_err| {
             if (show_invalid) {
-                std.debug.print("{s}  PARSE_ERROR  {s}\n", .{ entry.name, fm_err });
+                const row = try std.fmt.allocPrint(allocator, "{s}  PARSE_ERROR  {s}\n", .{ entry.name, fm_err });
+                try rows.append(row);
             }
             continue;
         }
@@ -2837,7 +2870,16 @@ fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         }
         if (!labels_ok) continue;
 
-        std.debug.print("{s}  {s}  {s} {s} {s} {s}  {s}  {s}\n", .{ id, status, pr, tp, effort, owner, title, labels });
+        const row = try std.fmt.allocPrint(allocator, "{s}  {s}  {s} {s} {s} {s}  {s}  {s}\n", .{ id, status, pr, tp, effort, owner, title, labels });
+        try rows.append(row);
+    }
+
+    if (rows.items.len > 0) {
+        try printStdout(allocator, "ID       STATUS        PR TYPE     EF OWNER         TITLE  [LABELS]\n", .{});
+        try printStdout(allocator, "--------------------------------------------------------------------------------------------------------------\n", .{});
+        for (rows.items) |row| {
+            try std.fs.File.stdout().writeAll(row);
+        }
     }
 }
 
@@ -2857,7 +2899,7 @@ fn cmdShow(allocator: std.mem.Allocator, id: []const u8) !void {
         std.process.exit(2);
     };
     defer allocator.free(content);
-    std.debug.print("{s}", .{content});
+    try std.fs.File.stdout().writeAll(content);
 }
 
 pub fn main() !void {
