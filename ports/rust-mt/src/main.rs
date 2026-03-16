@@ -77,6 +77,10 @@ enum Commands {
         #[arg(long = "max-claimed-per-owner", default_value_t = 2)]
         max_claimed_per_owner: i32,
         #[arg(long)]
+        skill: Option<String>,
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     AllocateTask {
@@ -98,6 +102,10 @@ enum Commands {
         max_claimed_per_owner: i32,
         #[arg(long, default_value_t = 5)]
         lease_minutes: i64,
+        #[arg(long)]
+        skill: Option<String>,
+        #[arg(long)]
+        role: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -1381,6 +1389,25 @@ fn cmd_comment(id: String, text: String) -> Result<i32> {
     Ok(0)
 }
 
+fn skill_pick_profiles(skill: &str) -> Option<(Vec<&'static str>, Vec<&'static str>)> {
+    match skill {
+        "design"   => Some((vec!["design"],   vec!["spec", "docs"])),
+        "database" => Some((vec!["database"], vec!["code", "refactor", "tests"])),
+        "review"   => Some((vec!["review"],   vec!["tests", "docs"])),
+        _ => None,
+    }
+}
+
+fn role_pick_profiles(role: &str) -> Option<(Vec<&'static str>, Vec<&'static str>)> {
+    match role {
+        "architect" => Some((vec!["design"],   vec!["spec", "docs", "refactor"])),
+        "devops"    => Some((vec!["devops"],   vec!["code", "chore", "docs"])),
+        "developer" => Some((vec!["feature"],  vec!["code", "tests", "refactor"])),
+        "reviewer"  => Some((vec!["review"],   vec!["tests", "docs"])),
+        _ => None,
+    }
+}
+
 fn cmd_pick(
     owner: String,
     label: Vec<String>,
@@ -1390,6 +1417,8 @@ fn cmd_pick(
     branch: String,
     ignore_deps: bool,
     max_claimed_per_owner: i32,
+    skill: Option<String>,
+    role: Option<String>,
     as_json: bool,
 ) -> Result<i32> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
@@ -1422,6 +1451,54 @@ fn cmd_pick(
         ));
     }
 
+    // Resolve --skill / --role profiles
+    let mut extra_labels: Vec<String> = Vec::new();
+    let mut type_filter: Option<BTreeSet<String>> = ticket_type
+        .as_ref()
+        .map(|t| std::iter::once(t.clone()).collect::<BTreeSet<_>>());
+
+    if let Some(ref sk) = skill {
+        match skill_pick_profiles(sk) {
+            None => return Err(anyhow!("unknown --skill value {:?}", sk)),
+            Some((lbs, types)) => {
+                extra_labels.extend(lbs.iter().map(|l| l.to_string()));
+                let type_set: BTreeSet<String> = types.iter().map(|t| t.to_string()).collect();
+                type_filter = Some(match type_filter.take() {
+                    None => type_set,
+                    Some(existing) => {
+                        let intersected: BTreeSet<_> = existing.intersection(&type_set).cloned().collect();
+                        if intersected.is_empty() {
+                            return Err(anyhow!("no compatible type filter remains after combining --type/--skill/--role"));
+                        }
+                        intersected
+                    }
+                });
+            }
+        }
+    }
+
+    if let Some(ref ro) = role {
+        match role_pick_profiles(ro) {
+            None => return Err(anyhow!("unknown --role value {:?}", ro)),
+            Some((lbs, types)) => {
+                extra_labels.extend(lbs.iter().map(|l| l.to_string()));
+                let type_set: BTreeSet<String> = types.iter().map(|t| t.to_string()).collect();
+                type_filter = Some(match type_filter.take() {
+                    None => type_set,
+                    Some(existing) => {
+                        let intersected: BTreeSet<_> = existing.intersection(&type_set).cloned().collect();
+                        if intersected.is_empty() {
+                            return Err(anyhow!("no compatible type filter remains after combining --type/--skill/--role"));
+                        }
+                        intersected
+                    }
+                });
+            }
+        }
+    }
+
+    let combined_label: Vec<String> = label.iter().chain(extra_labels.iter()).cloned().collect();
+
     let mut candidates: Vec<(f64, String, String, PathBuf)> = Vec::new();
     for (path, meta) in &tickets {
         if map_get_status(meta) != "ready" {
@@ -1432,15 +1509,15 @@ fn cmd_pick(
                 continue;
             }
         }
-        if let Some(ref wanted_type) = ticket_type {
-            if map_get_string(meta, "type").unwrap_or_default() != *wanted_type {
+        if let Some(ref type_set) = type_filter {
+            if !type_set.contains(&map_get_string(meta, "type").unwrap_or_default()) {
                 continue;
             }
         }
 
         let labels = map_get_string_array(meta, "labels");
         let label_set = labels.iter().cloned().collect::<BTreeSet<_>>();
-        if !label.is_empty() && !label.iter().all(|item| label_set.contains(item)) {
+        if !combined_label.is_empty() && !combined_label.iter().all(|item| label_set.contains(item)) {
             continue;
         }
         if !avoid_label.is_empty() && avoid_label.iter().any(|item| label_set.contains(item)) {
@@ -1521,6 +1598,8 @@ fn cmd_allocate_task(
     ignore_deps: bool,
     max_claimed_per_owner: i32,
     lease_minutes: i64,
+    skill: Option<String>,
+    role: Option<String>,
     as_json: bool,
 ) -> Result<i32> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
@@ -1559,6 +1638,62 @@ fn cmd_allocate_task(
         return Ok(2);
     }
 
+    // Resolve --skill / --role profiles
+    let mut extra_labels: Vec<String> = Vec::new();
+    let mut type_filter: Option<BTreeSet<String>> = ticket_type
+        .as_ref()
+        .map(|t| std::iter::once(t.clone()).collect::<BTreeSet<_>>());
+
+    if let Some(ref sk) = skill {
+        match skill_pick_profiles(sk) {
+            None => {
+                eprintln!("unknown --skill value {:?}", sk);
+                return Ok(1);
+            }
+            Some((lbs, types)) => {
+                extra_labels.extend(lbs.iter().map(|l| l.to_string()));
+                let type_set: BTreeSet<String> = types.iter().map(|t| t.to_string()).collect();
+                type_filter = Some(match type_filter.take() {
+                    None => type_set,
+                    Some(existing) => {
+                        let intersected: BTreeSet<_> = existing.intersection(&type_set).cloned().collect();
+                        if intersected.is_empty() {
+                            eprintln!("no compatible type filter remains after combining --type/--skill/--role");
+                            return Ok(2);
+                        }
+                        intersected
+                    }
+                });
+            }
+        }
+    }
+
+    if let Some(ref ro) = role {
+        match role_pick_profiles(ro) {
+            None => {
+                eprintln!("unknown --role value {:?}", ro);
+                return Ok(1);
+            }
+            Some((lbs, types)) => {
+                extra_labels.extend(lbs.iter().map(|l| l.to_string()));
+                let type_set: BTreeSet<String> = types.iter().map(|t| t.to_string()).collect();
+                type_filter = Some(match type_filter.take() {
+                    None => type_set,
+                    Some(existing) => {
+                        let intersected: BTreeSet<_> = existing.intersection(&type_set).cloned().collect();
+                        if intersected.is_empty() {
+                            eprintln!("no compatible type filter remains after combining --type/--skill/--role");
+                            return Ok(2);
+                        }
+                        intersected
+                    }
+                });
+            }
+        }
+    }
+
+    let combined_label: Vec<String> = label.iter().chain(extra_labels.iter()).cloned().collect();
+
     let mut candidates: Vec<(f64, String, String, PathBuf)> = Vec::new();
     for (path, meta) in &tickets {
         let status = map_get_status(meta);
@@ -1576,15 +1711,15 @@ fn cmd_allocate_task(
                 continue;
             }
         }
-        if let Some(ref wanted_type) = ticket_type {
-            if map_get_string(meta, "type").unwrap_or_default() != *wanted_type {
+        if let Some(ref type_set) = type_filter {
+            if !type_set.contains(&map_get_string(meta, "type").unwrap_or_default()) {
                 continue;
             }
         }
 
         let labels = map_get_string_array(meta, "labels");
         let label_set = labels.iter().cloned().collect::<BTreeSet<_>>();
-        if !label.is_empty() && !label.iter().all(|item| label_set.contains(item)) {
+        if !combined_label.is_empty() && !combined_label.iter().all(|item| label_set.contains(item)) {
             continue;
         }
         if !avoid_label.is_empty() && avoid_label.iter().any(|item| label_set.contains(item)) {
@@ -2162,6 +2297,8 @@ fn run() -> Result<i32> {
             branch,
             ignore_deps,
             max_claimed_per_owner,
+            skill,
+            role,
             json,
         } => cmd_pick(
             owner,
@@ -2172,6 +2309,8 @@ fn run() -> Result<i32> {
             branch,
             ignore_deps,
             max_claimed_per_owner,
+            skill,
+            role,
             json,
         ),
         Commands::AllocateTask {
@@ -2184,6 +2323,8 @@ fn run() -> Result<i32> {
             ignore_deps,
             max_claimed_per_owner,
             lease_minutes,
+            skill,
+            role,
             json,
         } => cmd_allocate_task(
             owner,
@@ -2195,6 +2336,8 @@ fn run() -> Result<i32> {
             ignore_deps,
             max_claimed_per_owner,
             lease_minutes,
+            skill,
+            role,
             json,
         ),
         Commands::FailTask {
