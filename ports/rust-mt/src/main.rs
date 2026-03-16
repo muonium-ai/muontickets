@@ -422,7 +422,7 @@ fn write_ticket(path: &Path, meta: &Mapping, body: &str) -> Result<()> {
 }
 
 fn default_ticket_template_text() -> &'static str {
-    "---\nid: T-000000\ntitle: Template: replace title\nstatus: ready\npriority: p1\ntype: code\neffort: s\nlabels: []\ntags: []\nowner: null\ncreated: 1970-01-01\nupdated: 1970-01-01\ndepends_on: []\nbranch: null\n---\n\n## Goal\nWrite a single-sentence goal.\n\n## Acceptance Criteria\n- [ ] Define clear, testable checks (2–5 items)\n\n## Notes\n"
+    "---\nid: T-000000\ntitle: Template: replace title\nstatus: ready\npriority: p1\ntype: code\neffort: s\nlabels: []\ntags: []\nowner: null\ncreated: 1970-01-01T00:00:00Z\nupdated: 1970-01-01T00:00:00Z\ndepends_on: []\nbranch: null\nretry_count: 0\nretry_limit: 3\nallocated_to: null\nallocated_at: null\nlease_expires_at: null\nlast_error: null\nlast_attempted_at: null\n---\n\n## Goal\nWrite a single-sentence goal.\n\n## Acceptance Criteria\n- [ ] Define clear, testable checks (2–5 items)\n\n## Notes\n\n## Agent Assignment\n- Suggested owner: agent-name\n- Suggested branch: feature/short-name\n\n## Implementation Plan\n- [ ] Describe 2-4 concrete execution steps\n- [ ] List test/validation commands to run\n- [ ] Note any dependency handoff requirements\n\n## Queue Lifecycle (if allocated)\n- [ ] Add progress with `mt comment <id> \"...\"`\n- [ ] If blocked/failing, run `mt fail-task <id> --error \"...\"`\n- [ ] On completion, move to `needs_review` then `done`\n"
 }
 
 fn ensure_ticket_template(repo_root: &Path) -> Result<bool> {
