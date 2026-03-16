@@ -883,6 +883,36 @@ fn typeAllowed(ticket_type: []const u8) bool {
     return false;
 }
 
+const PickProfile = struct {
+    labels: []const []const u8,
+    types: []const []const u8,
+};
+
+fn skillPickProfile(skill: []const u8) ?PickProfile {
+    const profiles = .{
+        .{ "design", PickProfile{ .labels = &.{"design"}, .types = &.{ "spec", "docs" } } },
+        .{ "database", PickProfile{ .labels = &.{"database"}, .types = &.{ "code", "refactor", "tests" } } },
+        .{ "review", PickProfile{ .labels = &.{"review"}, .types = &.{ "tests", "docs" } } },
+    };
+    inline for (profiles) |entry| {
+        if (std.mem.eql(u8, skill, entry[0])) return entry[1];
+    }
+    return null;
+}
+
+fn rolePickProfile(role: []const u8) ?PickProfile {
+    const profiles = .{
+        .{ "architect", PickProfile{ .labels = &.{"design"}, .types = &.{ "spec", "docs", "refactor" } } },
+        .{ "devops", PickProfile{ .labels = &.{"devops"}, .types = &.{ "code", "chore", "docs" } } },
+        .{ "developer", PickProfile{ .labels = &.{"feature"}, .types = &.{ "code", "tests", "refactor" } } },
+        .{ "reviewer", PickProfile{ .labels = &.{"review"}, .types = &.{ "tests", "docs" } } },
+    };
+    inline for (profiles) |entry| {
+        if (std.mem.eql(u8, role, entry[0])) return entry[1];
+    }
+    return null;
+}
+
 fn priorityWeight(priority: []const u8) i64 {
     if (std.mem.eql(u8, priority, "p0")) return 300;
     if (std.mem.eql(u8, priority, "p1")) return 200;
@@ -1624,6 +1654,8 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         std.debug.print("invalid type: {s}\n", .{type_filter.?});
         std.process.exit(2);
     }
+    const skill_flag = getOptValue(cmd_args, "--skill");
+    const role_flag = getOptValue(cmd_args, "--role");
     const explicit_branch = getOptValue(cmd_args, "--branch");
     const ignore_deps = hasFlag(cmd_args, "--ignore-deps");
     const json_out = hasFlag(cmd_args, "--json");
@@ -1658,6 +1690,77 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             arg_i += 1;
             continue;
         }
+    }
+
+    // Build type_candidates from --type, --skill, --role with intersection
+    var type_candidates = try std.array_list.Managed([]const u8).initCapacity(allocator, 8);
+    defer type_candidates.deinit();
+    var has_type_candidates = false;
+
+    if (type_filter) |tf| {
+        try type_candidates.append(tf);
+        has_type_candidates = true;
+    }
+
+    if (skill_flag) |sk| {
+        const prof = skillPickProfile(sk) orelse {
+            std.debug.print("unknown --skill value: {s}\n", .{sk});
+            std.process.exit(2);
+        };
+        for (prof.labels) |lbl| {
+            var already = false;
+            for (required_labels.items) |existing| {
+                if (std.mem.eql(u8, existing, lbl)) { already = true; break; }
+            }
+            if (!already) try required_labels.append(lbl);
+        }
+        if (has_type_candidates) {
+            var intersected = try std.array_list.Managed([]const u8).initCapacity(allocator, 4);
+            defer intersected.deinit();
+            for (type_candidates.items) |tc| {
+                for (prof.types) |pt| {
+                    if (std.mem.eql(u8, tc, pt)) { try intersected.append(tc); break; }
+                }
+            }
+            type_candidates.clearRetainingCapacity();
+            try type_candidates.appendSlice(intersected.items);
+        } else {
+            try type_candidates.appendSlice(prof.types);
+        }
+        has_type_candidates = true;
+    }
+
+    if (role_flag) |ro| {
+        const prof = rolePickProfile(ro) orelse {
+            std.debug.print("unknown --role value: {s}\n", .{ro});
+            std.process.exit(2);
+        };
+        for (prof.labels) |lbl| {
+            var already = false;
+            for (required_labels.items) |existing| {
+                if (std.mem.eql(u8, existing, lbl)) { already = true; break; }
+            }
+            if (!already) try required_labels.append(lbl);
+        }
+        if (has_type_candidates) {
+            var intersected = try std.array_list.Managed([]const u8).initCapacity(allocator, 4);
+            defer intersected.deinit();
+            for (type_candidates.items) |tc| {
+                for (prof.types) |pt| {
+                    if (std.mem.eql(u8, tc, pt)) { try intersected.append(tc); break; }
+                }
+            }
+            type_candidates.clearRetainingCapacity();
+            try type_candidates.appendSlice(intersected.items);
+        } else {
+            try type_candidates.appendSlice(prof.types);
+        }
+        has_type_candidates = true;
+    }
+
+    if (has_type_candidates and type_candidates.items.len == 0) {
+        std.debug.print("no compatible type filter remains after combining --type/--skill/--role\n", .{});
+        std.process.exit(2);
     }
 
     const repo = try findRepoRoot(allocator);
@@ -1718,9 +1821,13 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             const p = parseMetaField(content, "priority") orelse "";
             if (!std.mem.eql(u8, p, pf)) continue;
         }
-        if (type_filter) |tf| {
+        if (has_type_candidates) {
             const tp = parseMetaField(content, "type") orelse "";
-            if (!std.mem.eql(u8, tp, tf)) continue;
+            var type_match = false;
+            for (type_candidates.items) |tc| {
+                if (std.mem.eql(u8, tp, tc)) { type_match = true; break; }
+            }
+            if (!type_match) continue;
         }
         var labels_ok = true;
         for (required_labels.items) |label| {
@@ -1827,6 +1934,8 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
         std.debug.print("invalid type: {s}\n", .{type_filter.?});
         std.process.exit(2);
     }
+    const skill_flag = getOptValue(cmd_args, "--skill");
+    const role_flag = getOptValue(cmd_args, "--role");
     const explicit_branch = getOptValue(cmd_args, "--branch");
     const ignore_deps = hasFlag(cmd_args, "--ignore-deps");
     const json_out = hasFlag(cmd_args, "--json");
@@ -1868,6 +1977,77 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
             arg_i += 1;
             continue;
         }
+    }
+
+    // Build type_candidates from --type, --skill, --role with intersection
+    var type_candidates = try std.array_list.Managed([]const u8).initCapacity(allocator, 8);
+    defer type_candidates.deinit();
+    var has_type_candidates = false;
+
+    if (type_filter) |tf| {
+        try type_candidates.append(tf);
+        has_type_candidates = true;
+    }
+
+    if (skill_flag) |sk| {
+        const prof = skillPickProfile(sk) orelse {
+            std.debug.print("unknown --skill value: {s}\n", .{sk});
+            std.process.exit(2);
+        };
+        for (prof.labels) |lbl| {
+            var already = false;
+            for (required_labels.items) |existing| {
+                if (std.mem.eql(u8, existing, lbl)) { already = true; break; }
+            }
+            if (!already) try required_labels.append(lbl);
+        }
+        if (has_type_candidates) {
+            var intersected = try std.array_list.Managed([]const u8).initCapacity(allocator, 4);
+            defer intersected.deinit();
+            for (type_candidates.items) |tc| {
+                for (prof.types) |pt| {
+                    if (std.mem.eql(u8, tc, pt)) { try intersected.append(tc); break; }
+                }
+            }
+            type_candidates.clearRetainingCapacity();
+            try type_candidates.appendSlice(intersected.items);
+        } else {
+            try type_candidates.appendSlice(prof.types);
+        }
+        has_type_candidates = true;
+    }
+
+    if (role_flag) |ro| {
+        const prof = rolePickProfile(ro) orelse {
+            std.debug.print("unknown --role value: {s}\n", .{ro});
+            std.process.exit(2);
+        };
+        for (prof.labels) |lbl| {
+            var already = false;
+            for (required_labels.items) |existing| {
+                if (std.mem.eql(u8, existing, lbl)) { already = true; break; }
+            }
+            if (!already) try required_labels.append(lbl);
+        }
+        if (has_type_candidates) {
+            var intersected = try std.array_list.Managed([]const u8).initCapacity(allocator, 4);
+            defer intersected.deinit();
+            for (type_candidates.items) |tc| {
+                for (prof.types) |pt| {
+                    if (std.mem.eql(u8, tc, pt)) { try intersected.append(tc); break; }
+                }
+            }
+            type_candidates.clearRetainingCapacity();
+            try type_candidates.appendSlice(intersected.items);
+        } else {
+            try type_candidates.appendSlice(prof.types);
+        }
+        has_type_candidates = true;
+    }
+
+    if (has_type_candidates and type_candidates.items.len == 0) {
+        std.debug.print("no compatible type filter remains after combining --type/--skill/--role\n", .{});
+        std.process.exit(2);
     }
 
     const repo = try findRepoRoot(allocator);
@@ -1936,9 +2116,13 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
             const p = parseMetaField(content, "priority") orelse "";
             if (!std.mem.eql(u8, p, pf)) continue;
         }
-        if (type_filter) |tf| {
+        if (has_type_candidates) {
             const tp = parseMetaField(content, "type") orelse "";
-            if (!std.mem.eql(u8, tp, tf)) continue;
+            var type_match = false;
+            for (type_candidates.items) |tc| {
+                if (std.mem.eql(u8, tp, tc)) { type_match = true; break; }
+            }
+            if (!type_match) continue;
         }
 
         var labels_ok = true;
