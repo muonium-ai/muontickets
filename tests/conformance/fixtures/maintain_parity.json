@@ -1,0 +1,146 @@
+{
+  "name": "maintain_parity",
+  "description": "Exercises maintain subcommands: init-config, doctor, list, scan, create with filters and options.",
+  "steps": [
+    {
+      "name": "init board",
+      "args": ["init"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["created"]
+    },
+    {
+      "name": "maintain list all rules",
+      "args": ["maintain", "list"],
+      "expect_exit": 0,
+      "expect_stdout_contains": [
+        "CVE Dependency Vulnerability",
+        "Exposed Secrets in Repo",
+        "Missing Changelog"
+      ]
+    },
+    {
+      "name": "maintain list category filter docs",
+      "args": ["maintain", "list", "--category", "docs"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["Outdated API Docs"]
+    },
+    {
+      "name": "maintain list docs does not show security",
+      "args": ["maintain", "list", "--category", "docs"],
+      "expect_exit": 0,
+      "expect_stdout_not_contains": ["CVE Dependency"]
+    },
+    {
+      "name": "maintain list rule filter",
+      "args": ["maintain", "list", "--rule", "2", "--rule", "48"],
+      "expect_exit": 0,
+      "expect_stdout_contains": [
+        "Exposed Secrets",
+        "Excessive TODO"
+      ]
+    },
+    {
+      "name": "maintain list shows detection heuristic",
+      "args": ["maintain", "list", "--rule", "42"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["detection:"]
+    },
+    {
+      "name": "maintain list shows scanner type",
+      "args": ["maintain", "list", "--rule", "42"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["built-in"]
+    },
+    {
+      "name": "maintain list shows external for rule without scanner",
+      "args": ["maintain", "list", "--rule", "1"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["external"]
+    },
+    {
+      "name": "maintain scan requires filter",
+      "args": ["maintain", "scan"],
+      "expect_exit": 2,
+      "expect_stderr_contains": ["required"]
+    },
+    {
+      "name": "maintain scan pass result (rule 18 no .env)",
+      "args": ["maintain", "scan", "--rule", "18"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["[PASS]"]
+    },
+    {
+      "name": "maintain scan skip result (rule 1 no built-in scanner)",
+      "args": ["maintain", "scan", "--rule", "1"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["[SKIP]", "no built-in scanner"]
+    },
+    {
+      "name": "maintain scan json output",
+      "args": ["maintain", "scan", "--rule", "18", "--format", "json"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["rule_id", "18", "pass"]
+    },
+    {
+      "name": "maintain scan summary counts",
+      "args": ["maintain", "scan", "--rule", "1", "--rule", "18"],
+      "expect_exit": 0,
+      "expect_stderr_contains": ["rule(s) scanned"]
+    },
+    {
+      "name": "maintain init-config creates file",
+      "args": ["maintain", "init-config"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["maintain.yaml"]
+    },
+    {
+      "name": "maintain init-config no overwrite",
+      "args": ["maintain", "init-config"],
+      "expect_exit": 1,
+      "expect_stderr_contains": ["already exists"]
+    },
+    {
+      "name": "maintain init-config force overwrite",
+      "args": ["maintain", "init-config", "--force"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["maintain.yaml"]
+    },
+    {
+      "name": "maintain doctor no tools enabled",
+      "args": ["maintain", "doctor"],
+      "expect_exit": 0,
+      "expect_stderr_contains": ["no external tools enabled"]
+    },
+    {
+      "name": "maintain create requires filter",
+      "args": ["maintain", "create"],
+      "expect_exit": 2,
+      "expect_stderr_contains": ["required"]
+    },
+    {
+      "name": "maintain create dry-run skip-scan",
+      "args": ["maintain", "create", "--category", "testing", "--dry-run", "--skip-scan"],
+      "expect_exit": 0,
+      "expect_stdout_contains": ["[dry-run]", "[MAINT-131]"],
+      "expect_stderr_contains": ["would be created"]
+    },
+    {
+      "name": "maintain create skips passing scan",
+      "args": ["maintain", "create", "--rule", "18"],
+      "expect_exit": 0,
+      "expect_stderr_contains": ["0 ticket(s) created", "1 skipped (scan passed)"]
+    },
+    {
+      "name": "maintain create skip-scan creates suggestion ticket",
+      "args": ["maintain", "create", "--rule", "1", "--skip-scan"],
+      "expect_exit": 0,
+      "expect_stderr_contains": ["1 ticket(s) created"]
+    },
+    {
+      "name": "maintain create deduplication",
+      "args": ["maintain", "create", "--rule", "1", "--skip-scan"],
+      "expect_exit": 0,
+      "expect_stderr_contains": ["0 ticket(s) created", "1 skipped (duplicates)"]
+    }
+  ]
+}
