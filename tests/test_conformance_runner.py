@@ -134,6 +134,13 @@ class ConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
+    def test_zig_core_workflow_fixture(self) -> None:
+        zig_bin = self.get_zig_bin()
+
+        proc = self.run_fixture_with_cmd("core_workflow.json", zig_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
     def test_zig_reporting_graph_pick_fixture(self) -> None:
         zig_bin = self.get_zig_bin()
 
