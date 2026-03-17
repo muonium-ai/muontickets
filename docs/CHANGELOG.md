@@ -16,6 +16,16 @@ Example:
 
 ## Unreleased
 
+## v1.2.0 — 2026-03-17
+
+- 2026-03-17 | Added | Full 4-port feature parity (Python, Zig, Rust, C) for all commands including `maintain` subcommand group
+- 2026-03-17 | Added | Native `maintain` implementation in Rust port (init-config, doctor, list, scan, create) with 150 rules and 7 built-in scanners
+- 2026-03-17 | Added | Native `maintain` implementation in C port (init-config, doctor, list, scan, create) with 150 rules, POSIX regex scanners
+- 2026-03-17 | Fixed | Zig `maintain` MAINT format sign bug (i32→u32 cast for rule IDs)
+- 2026-03-17 | Added | `maintain_parity` conformance fixture (22 steps) covering all 5 maintain subcommands across all 4 ports
+- 2026-03-17 | Changed | Conformance suite expanded to 24 tests (6 fixtures × 4 ports), all passing
+- 2026-03-17 | Docs | Moved documentation files to `docs/` directory
+- 2026-03-17 | Docs | Updated parity report to reflect full 4-port alignment across all features
 - 2026-03-04 | Changed | Updated ticket metadata defaults to UTC timestamps (`created`/`updated`) and expanded template/runtime fields (`retry_*`, allocation/lease fields, last error/attempt) with backward-compatible schema validation
 - 2026-03-04 | Docs | Added end-to-end onboarding docs for installing MuonTickets as a git submodule in a new project, plus template-driven agent ticket creation workflow updates across README/skills/agent snippets
 - 2026-03-04 | Docs | Added `RELEASE_CHECKLIST.md` with end-to-end unified `v*` release runbook (preflight, tagging, asset verification, platform smoke checks)
