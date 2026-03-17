@@ -78,6 +78,10 @@ enum Commands {
         #[arg(long = "max-claimed-per-owner", default_value_t = 2)]
         max_claimed_per_owner: i32,
         #[arg(long)]
+        skill: Option<String>,
+        #[arg(long)]
+        role: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     AllocateTask {
@@ -99,6 +103,10 @@ enum Commands {
         max_claimed_per_owner: i32,
         #[arg(long, default_value_t = 5)]
         lease_minutes: i64,
+        #[arg(long)]
+        skill: Option<String>,
+        #[arg(long)]
+        role: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -476,7 +484,7 @@ fn write_ticket(path: &Path, meta: &Mapping, body: &str) -> Result<()> {
 }
 
 fn default_ticket_template_text() -> &'static str {
-    "---\nid: T-000000\ntitle: Template: replace title\nstatus: ready\npriority: p1\ntype: code\neffort: s\nlabels: []\ntags: []\nowner: null\ncreated: 1970-01-01\nupdated: 1970-01-01\ndepends_on: []\nbranch: null\n---\n\n## Goal\nWrite a single-sentence goal.\n\n## Acceptance Criteria\n- [ ] Define clear, testable checks (2–5 items)\n\n## Notes\n"
+    "---\nid: T-000000\ntitle: Template: replace title\nstatus: ready\npriority: p1\ntype: code\neffort: s\nlabels: []\ntags: []\nowner: null\ncreated: 1970-01-01T00:00:00Z\nupdated: 1970-01-01T00:00:00Z\ndepends_on: []\nbranch: null\nretry_count: 0\nretry_limit: 3\nallocated_to: null\nallocated_at: null\nlease_expires_at: null\nlast_error: null\nlast_attempted_at: null\n---\n\n## Goal\nWrite a single-sentence goal.\n\n## Acceptance Criteria\n- [ ] Define clear, testable checks (2–5 items)\n\n## Notes\n\n## Agent Assignment\n- Suggested owner: agent-name\n- Suggested branch: feature/short-name\n\n## Implementation Plan\n- [ ] Describe 2-4 concrete execution steps\n- [ ] List test/validation commands to run\n- [ ] Note any dependency handoff requirements\n\n## Queue Lifecycle (if allocated)\n- [ ] Add progress with `mt comment <id> \"...\"`\n- [ ] If blocked/failing, run `mt fail-task <id> --error \"...\"`\n- [ ] On completion, move to `needs_review` then `done`\n"
 }
 
 fn ensure_ticket_template(repo_root: &Path) -> Result<bool> {
@@ -1076,19 +1084,119 @@ fn cmd_validate(max_claimed_per_owner: i32, enforce_done_deps: bool) -> Result<i
         }
     }
 
+    let id_re = id_regex();
+    let date_re = Regex::new(r"^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}Z)?$").expect("valid date regex");
+    let required_fields = &[
+        "id", "title", "status", "priority", "type", "labels",
+        "owner", "created", "updated", "depends_on", "branch",
+    ];
+
     for (path, meta) in &records {
         let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("<unknown>");
+
+        // Required field presence
+        for &field in required_fields {
+            if meta.get(Value::String(field.to_string())).is_none() {
+                errors.push(format!("{filename}: missing required field {field:?}"));
+            }
+        }
+
+        // id: pattern ^T-\d{6}$
+        if let Some(id) = map_get_string(meta, "id") {
+            if !id_re.is_match(&id) {
+                errors.push(format!("{filename}: id must match T-XXXXXX pattern, got {id:?}"));
+            }
+        }
+
+        // title: minLength 3
+        if let Some(title) = map_get_string(meta, "title") {
+            if title.len() < 3 {
+                errors.push(format!("{filename}: title must be at least 3 characters, got {title:?}"));
+            }
+        }
+
+        // status: enum check
         let status = map_get_status(meta);
         if !DEFAULT_STATES.contains(&status.as_str()) {
             errors.push(format!("{filename}: status must be one of {:?}, got {status:?}", DEFAULT_STATES));
         }
+
+        // priority: enum check
+        let priority = map_get_string(meta, "priority").unwrap_or_default();
+        if !DEFAULT_PRIORITIES.contains(&priority.as_str()) {
+            errors.push(format!("{filename}: priority must be one of {:?}, got {priority:?}", DEFAULT_PRIORITIES));
+        }
+
+        // type: enum check
+        let ticket_type = map_get_string(meta, "type").unwrap_or_default();
+        if !DEFAULT_TYPES.contains(&ticket_type.as_str()) {
+            errors.push(format!("{filename}: type must be one of {:?}, got {ticket_type:?}", DEFAULT_TYPES));
+        }
+
+        // effort: enum check
         let effort = map_get_string(meta, "effort").unwrap_or_else(|| "s".to_string());
         if !DEFAULT_EFFORTS.contains(&effort.as_str()) {
             errors.push(format!("{filename}: effort must be one of {:?}, got {effort:?}", DEFAULT_EFFORTS));
         }
+
+        // labels: must be array
+        if let Some(val) = meta.get(Value::String("labels".to_string())) {
+            if !val.is_sequence() && !val.is_null() {
+                errors.push(format!("{filename}: labels must be an array"));
+            }
+        }
+
+        // depends_on: must be array
+        if let Some(val) = meta.get(Value::String("depends_on".to_string())) {
+            if !val.is_sequence() && !val.is_null() {
+                errors.push(format!("{filename}: depends_on must be an array"));
+            }
+        }
+
+        // owner: null or non-empty string
+        if let Some(val) = meta.get(Value::String("owner".to_string())) {
+            if !val.is_null() {
+                if let Some(s) = val.as_str() {
+                    if s.is_empty() {
+                        errors.push(format!("{filename}: owner must be null or a non-empty string"));
+                    }
+                }
+            }
+        }
+
+        // branch: null or non-empty string
+        if let Some(val) = meta.get(Value::String("branch".to_string())) {
+            if !val.is_null() {
+                if let Some(s) = val.as_str() {
+                    if s.is_empty() {
+                        errors.push(format!("{filename}: branch must be null or a non-empty string"));
+                    }
+                }
+            }
+        }
+
+        // created: ISO date pattern
+        let created = map_get_string(meta, "created").unwrap_or_default();
+        if !created.is_empty() && !date_re.is_match(&created) {
+            errors.push(format!("{filename}: created must match YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, got {created:?}"));
+        }
+
+        // updated: ISO date pattern
+        let updated = map_get_string(meta, "updated").unwrap_or_default();
+        if !updated.is_empty() && !date_re.is_match(&updated) {
+            errors.push(format!("{filename}: updated must match YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, got {updated:?}"));
+        }
+
+        // updated >= created (compare as strings, ISO dates sort lexicographically)
+        if !created.is_empty() && !updated.is_empty() && updated < created {
+            errors.push(format!("{filename}: updated ({updated}) is earlier than created ({created})"));
+        }
+
+        // Business logic: claimed must have owner
         if status == "claimed" && map_get_string(meta, "owner").unwrap_or_default().is_empty() {
             errors.push(format!("{filename}: claimed ticket must have owner"));
         }
+        // Business logic: needs_review/done must have branch
         if (status == "needs_review" || status == "done")
             && map_get_string(meta, "branch").unwrap_or_default().is_empty()
         {
@@ -1435,6 +1543,25 @@ fn cmd_comment(id: String, text: String) -> Result<i32> {
     Ok(0)
 }
 
+fn skill_pick_profiles(skill: &str) -> Option<(Vec<&'static str>, Vec<&'static str>)> {
+    match skill {
+        "design"   => Some((vec!["design"],   vec!["spec", "docs"])),
+        "database" => Some((vec!["database"], vec!["code", "refactor", "tests"])),
+        "review"   => Some((vec!["review"],   vec!["tests", "docs"])),
+        _ => None,
+    }
+}
+
+fn role_pick_profiles(role: &str) -> Option<(Vec<&'static str>, Vec<&'static str>)> {
+    match role {
+        "architect" => Some((vec!["design"],   vec!["spec", "docs", "refactor"])),
+        "devops"    => Some((vec!["devops"],   vec!["code", "chore", "docs"])),
+        "developer" => Some((vec!["feature"],  vec!["code", "tests", "refactor"])),
+        "reviewer"  => Some((vec!["review"],   vec!["tests", "docs"])),
+        _ => None,
+    }
+}
+
 fn cmd_pick(
     owner: String,
     label: Vec<String>,
@@ -1444,6 +1571,8 @@ fn cmd_pick(
     branch: String,
     ignore_deps: bool,
     max_claimed_per_owner: i32,
+    skill: Option<String>,
+    role: Option<String>,
     as_json: bool,
 ) -> Result<i32> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
@@ -1476,6 +1605,54 @@ fn cmd_pick(
         ));
     }
 
+    // Resolve --skill / --role profiles
+    let mut extra_labels: Vec<String> = Vec::new();
+    let mut type_filter: Option<BTreeSet<String>> = ticket_type
+        .as_ref()
+        .map(|t| std::iter::once(t.clone()).collect::<BTreeSet<_>>());
+
+    if let Some(ref sk) = skill {
+        match skill_pick_profiles(sk) {
+            None => return Err(anyhow!("unknown --skill value {:?}", sk)),
+            Some((lbs, types)) => {
+                extra_labels.extend(lbs.iter().map(|l| l.to_string()));
+                let type_set: BTreeSet<String> = types.iter().map(|t| t.to_string()).collect();
+                type_filter = Some(match type_filter.take() {
+                    None => type_set,
+                    Some(existing) => {
+                        let intersected: BTreeSet<_> = existing.intersection(&type_set).cloned().collect();
+                        if intersected.is_empty() {
+                            return Err(anyhow!("no compatible type filter remains after combining --type/--skill/--role"));
+                        }
+                        intersected
+                    }
+                });
+            }
+        }
+    }
+
+    if let Some(ref ro) = role {
+        match role_pick_profiles(ro) {
+            None => return Err(anyhow!("unknown --role value {:?}", ro)),
+            Some((lbs, types)) => {
+                extra_labels.extend(lbs.iter().map(|l| l.to_string()));
+                let type_set: BTreeSet<String> = types.iter().map(|t| t.to_string()).collect();
+                type_filter = Some(match type_filter.take() {
+                    None => type_set,
+                    Some(existing) => {
+                        let intersected: BTreeSet<_> = existing.intersection(&type_set).cloned().collect();
+                        if intersected.is_empty() {
+                            return Err(anyhow!("no compatible type filter remains after combining --type/--skill/--role"));
+                        }
+                        intersected
+                    }
+                });
+            }
+        }
+    }
+
+    let combined_label: Vec<String> = label.iter().chain(extra_labels.iter()).cloned().collect();
+
     let mut candidates: Vec<(f64, String, String, PathBuf)> = Vec::new();
     for (path, meta) in &tickets {
         if map_get_status(meta) != "ready" {
@@ -1486,15 +1663,15 @@ fn cmd_pick(
                 continue;
             }
         }
-        if let Some(ref wanted_type) = ticket_type {
-            if map_get_string(meta, "type").unwrap_or_default() != *wanted_type {
+        if let Some(ref type_set) = type_filter {
+            if !type_set.contains(&map_get_string(meta, "type").unwrap_or_default()) {
                 continue;
             }
         }
 
         let labels = map_get_string_array(meta, "labels");
         let label_set = labels.iter().cloned().collect::<BTreeSet<_>>();
-        if !label.is_empty() && !label.iter().all(|item| label_set.contains(item)) {
+        if !combined_label.is_empty() && !combined_label.iter().all(|item| label_set.contains(item)) {
             continue;
         }
         if !avoid_label.is_empty() && avoid_label.iter().any(|item| label_set.contains(item)) {
@@ -1575,6 +1752,8 @@ fn cmd_allocate_task(
     ignore_deps: bool,
     max_claimed_per_owner: i32,
     lease_minutes: i64,
+    skill: Option<String>,
+    role: Option<String>,
     as_json: bool,
 ) -> Result<i32> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
@@ -1613,6 +1792,62 @@ fn cmd_allocate_task(
         return Ok(2);
     }
 
+    // Resolve --skill / --role profiles
+    let mut extra_labels: Vec<String> = Vec::new();
+    let mut type_filter: Option<BTreeSet<String>> = ticket_type
+        .as_ref()
+        .map(|t| std::iter::once(t.clone()).collect::<BTreeSet<_>>());
+
+    if let Some(ref sk) = skill {
+        match skill_pick_profiles(sk) {
+            None => {
+                eprintln!("unknown --skill value {:?}", sk);
+                return Ok(1);
+            }
+            Some((lbs, types)) => {
+                extra_labels.extend(lbs.iter().map(|l| l.to_string()));
+                let type_set: BTreeSet<String> = types.iter().map(|t| t.to_string()).collect();
+                type_filter = Some(match type_filter.take() {
+                    None => type_set,
+                    Some(existing) => {
+                        let intersected: BTreeSet<_> = existing.intersection(&type_set).cloned().collect();
+                        if intersected.is_empty() {
+                            eprintln!("no compatible type filter remains after combining --type/--skill/--role");
+                            return Ok(2);
+                        }
+                        intersected
+                    }
+                });
+            }
+        }
+    }
+
+    if let Some(ref ro) = role {
+        match role_pick_profiles(ro) {
+            None => {
+                eprintln!("unknown --role value {:?}", ro);
+                return Ok(1);
+            }
+            Some((lbs, types)) => {
+                extra_labels.extend(lbs.iter().map(|l| l.to_string()));
+                let type_set: BTreeSet<String> = types.iter().map(|t| t.to_string()).collect();
+                type_filter = Some(match type_filter.take() {
+                    None => type_set,
+                    Some(existing) => {
+                        let intersected: BTreeSet<_> = existing.intersection(&type_set).cloned().collect();
+                        if intersected.is_empty() {
+                            eprintln!("no compatible type filter remains after combining --type/--skill/--role");
+                            return Ok(2);
+                        }
+                        intersected
+                    }
+                });
+            }
+        }
+    }
+
+    let combined_label: Vec<String> = label.iter().chain(extra_labels.iter()).cloned().collect();
+
     let mut candidates: Vec<(f64, String, String, PathBuf)> = Vec::new();
     for (path, meta) in &tickets {
         let status = map_get_status(meta);
@@ -1630,15 +1865,15 @@ fn cmd_allocate_task(
                 continue;
             }
         }
-        if let Some(ref wanted_type) = ticket_type {
-            if map_get_string(meta, "type").unwrap_or_default() != *wanted_type {
+        if let Some(ref type_set) = type_filter {
+            if !type_set.contains(&map_get_string(meta, "type").unwrap_or_default()) {
                 continue;
             }
         }
 
         let labels = map_get_string_array(meta, "labels");
         let label_set = labels.iter().cloned().collect::<BTreeSet<_>>();
-        if !label.is_empty() && !label.iter().all(|item| label_set.contains(item)) {
+        if !combined_label.is_empty() && !combined_label.iter().all(|item| label_set.contains(item)) {
             continue;
         }
         if !avoid_label.is_empty() && avoid_label.iter().any(|item| label_set.contains(item)) {
@@ -3564,6 +3799,8 @@ fn run() -> Result<i32> {
             branch,
             ignore_deps,
             max_claimed_per_owner,
+            skill,
+            role,
             json,
         } => cmd_pick(
             owner,
@@ -3574,6 +3811,8 @@ fn run() -> Result<i32> {
             branch,
             ignore_deps,
             max_claimed_per_owner,
+            skill,
+            role,
             json,
         ),
         Commands::AllocateTask {
@@ -3586,6 +3825,8 @@ fn run() -> Result<i32> {
             ignore_deps,
             max_claimed_per_owner,
             lease_minutes,
+            skill,
+            role,
             json,
         } => cmd_allocate_task(
             owner,
@@ -3597,6 +3838,8 @@ fn run() -> Result<i32> {
             ignore_deps,
             max_claimed_per_owner,
             lease_minutes,
+            skill,
+            role,
             json,
         ),
         Commands::FailTask {
