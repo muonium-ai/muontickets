@@ -239,6 +239,34 @@ class ConformanceRunnerTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
         self.assertIn("OK: all steps passed", proc.stdout)
 
+    # --- maintain_parity fixture tests ---
+
+    def test_maintain_parity_fixture(self) -> None:
+        proc = self.run_fixture("maintain_parity.json")
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_zig_maintain_parity_fixture(self) -> None:
+        zig_bin = self.get_zig_bin()
+
+        proc = self.run_fixture_with_cmd("maintain_parity.json", zig_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_rust_maintain_parity_fixture(self) -> None:
+        rust_bin = self.get_rust_bin()
+
+        proc = self.run_fixture_with_cmd("maintain_parity.json", rust_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
+    def test_c_maintain_parity_fixture(self) -> None:
+        c_bin = self.get_c_bin()
+
+        proc = self.run_fixture_with_cmd("maintain_parity.json", c_bin)
+        self.assertEqual(proc.returncode, 0, msg=f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
+        self.assertIn("OK: all steps passed", proc.stdout)
+
     def test_c_native_init_bootstrap_and_state_sync(self) -> None:
         c_bin = self.get_c_bin()
 

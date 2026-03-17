@@ -27,7 +27,11 @@ test-conformance:
 		tests.test_conformance_runner.ConformanceRunnerTests.test_c_reporting_graph_pick_fixture \
 		tests.test_conformance_runner.ConformanceRunnerTests.test_c_options_parity_fixture \
 		tests.test_conformance_runner.ConformanceRunnerTests.test_c_pick_scoring_fixture \
-		tests.test_conformance_runner.ConformanceRunnerTests.test_c_queue_allocate_fail_fixture
+		tests.test_conformance_runner.ConformanceRunnerTests.test_c_queue_allocate_fail_fixture \
+		tests.test_conformance_runner.ConformanceRunnerTests.test_maintain_parity_fixture \
+		tests.test_conformance_runner.ConformanceRunnerTests.test_zig_maintain_parity_fixture \
+		tests.test_conformance_runner.ConformanceRunnerTests.test_rust_maintain_parity_fixture \
+		tests.test_conformance_runner.ConformanceRunnerTests.test_c_maintain_parity_fixture
 
 benchmark-smoke:
 	$(PY) tools/perf_1000/benchmark_ticket_lifecycle.py --count 30
