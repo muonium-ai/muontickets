@@ -23,6 +23,7 @@ const Command = enum {
     validate,
     report,
     version,
+    maintain,
 };
 
 fn parseCommand(raw: []const u8) ?Command {
@@ -44,6 +45,7 @@ fn parseCommand(raw: []const u8) ?Command {
     if (std.mem.eql(u8, raw, "validate")) return .validate;
     if (std.mem.eql(u8, raw, "report")) return .report;
     if (std.mem.eql(u8, raw, "version")) return .version;
+    if (std.mem.eql(u8, raw, "maintain")) return .maintain;
     return null;
 }
 
@@ -73,6 +75,7 @@ fn printHelp() void {
         \\  validate
         \\  report
         \\  version
+        \\  maintain
         \\ 
         \\Implemented: all listed commands
         \\ 
@@ -3086,6 +3089,1625 @@ fn cmdShow(allocator: std.mem.Allocator, id: []const u8) !void {
     try std.fs.File.stdout().writeAll(content);
 }
 
+// ========== Maintain command group ==========
+
+const MaintenanceRule = struct {
+    id: i32,
+    title: []const u8,
+    category: []const u8,
+    detection: []const u8,
+    action: []const u8,
+    default_priority: []const u8,
+    default_type: []const u8,
+    default_effort: []const u8,
+    labels: []const []const u8,
+    external_tool: []const u8,
+};
+
+const maint_categories = [_][]const u8{
+    "security",        "deps",     "code-health",      "performance",
+    "database",        "infrastructure", "observability",
+    "testing",         "docs",
+};
+
+const maintenance_rules = [_]MaintenanceRule{
+    .{ .id = 1, .title = "CVE Dependency Vulnerability", .category = "security", .detection = "dependency version < secure version from CVE DB", .action = "upgrade dependency and run tests", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "npm audit | pip-audit | cargo audit | osv-scanner | trivy | grype" },
+    .{ .id = 2, .title = "Exposed Secrets in Repo", .category = "security", .detection = "regex patterns (AKIA..., private_key)", .action = "remove secret and move to vault", .default_priority = "p0", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "" },
+    .{ .id = 3, .title = "Expired SSL Certificate", .category = "security", .detection = "ssl_expiry_date < now + 14 days", .action = "renew certificate", .default_priority = "p0", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "openssl s_client -connect host:443 | openssl x509 -noout -dates" },
+    .{ .id = 4, .title = "Missing Security Headers", .category = "security", .detection = "missing CSP, X-Frame-Options, X-XSS-Protection", .action = "add headers", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "curl -I <url> (check response headers for CSP, X-Frame-Options, X-XSS-Protection)" },
+    .{ .id = 5, .title = "Insecure Hashing Algorithm", .category = "security", .detection = "md5 or sha1 usage", .action = "migrate to argon2/bcrypt", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "grep -rn 'md5\\|sha1\\|MD5\\|SHA1' --include='*.py' --include='*.js' --include='*.go'" },
+    .{ .id = 6, .title = "Hardcoded Password", .category = "security", .detection = "password=\"...\" pattern", .action = "move to environment variable", .default_priority = "p0", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "" },
+    .{ .id = 7, .title = "Open Debug Ports", .category = "security", .detection = "container exposing debug ports (9229, 3000)", .action = "disable in production", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "docker inspect <container> | grep -i port; kubectl get svc -o json" },
+    .{ .id = 8, .title = "Unauthenticated Admin Endpoint", .category = "security", .detection = "/admin route without auth middleware", .action = "enforce auth guard", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "review route definitions for /admin paths without auth middleware" },
+    .{ .id = 9, .title = "Excessive IAM Privileges", .category = "security", .detection = "policy contains \"*\"", .action = "restrict permissions", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "aws iam list-policies --only-attached | grep '\"*\"'; gcloud iam policies" },
+    .{ .id = 10, .title = "Unencrypted DB Connection", .category = "security", .detection = "connection string missing TLS flag", .action = "enforce encrypted connections", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "grep -rn 'sslmode=disable\\|ssl=false\\|useSSL=false' (connection strings)" },
+    .{ .id = 11, .title = "Weak JWT Secret", .category = "security", .detection = "JWT secret length < 32 characters or common value", .action = "rotate to strong secret", .default_priority = "p0", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "grep -rn 'jwt.sign\\|JWT_SECRET\\|jwt_secret' and check secret length/entropy" },
+    .{ .id = 12, .title = "Missing Rate Limiting", .category = "security", .detection = "API endpoints without rate limit middleware", .action = "add rate limiting", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "review API framework middleware config for rate-limit setup" },
+    .{ .id = 13, .title = "Disabled CSRF Protection", .category = "security", .detection = "CSRF middleware disabled or missing", .action = "enable CSRF protection", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "review framework config for CSRF middleware (csrf_exempt, disable_csrf)" },
+    .{ .id = 14, .title = "Dependency Signature Mismatch", .category = "security", .detection = "package checksum does not match registry", .action = "verify and re-fetch dependency", .default_priority = "p0", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "npm audit signatures | pip hash --verify | cargo verify-project" },
+    .{ .id = 15, .title = "Container Running as Root", .category = "security", .detection = "Dockerfile missing USER directive", .action = "add non-root user", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "" },
+    .{ .id = 16, .title = "Outdated OpenSSL", .category = "security", .detection = "OpenSSL version < latest stable", .action = "upgrade OpenSSL", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "openssl version; dpkg -l openssl; brew info openssl" },
+    .{ .id = 17, .title = "Public Cloud Bucket", .category = "security", .detection = "storage bucket with public access enabled", .action = "restrict bucket access", .default_priority = "p0", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "aws s3api get-bucket-acl --bucket <name>; gsutil iam get gs://<bucket>" },
+    .{ .id = 18, .title = "Exposed .env File", .category = "security", .detection = ".env file tracked in git or publicly accessible", .action = "remove from tracking and add to .gitignore", .default_priority = "p0", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "" },
+    .{ .id = 19, .title = "Missing MFA for Admin", .category = "security", .detection = "admin accounts without MFA enabled", .action = "enforce MFA", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "aws iam get-login-profile; review admin user MFA status in cloud console" },
+    .{ .id = 20, .title = "Suspicious Login Activity", .category = "security", .detection = "unusual login patterns or locations", .action = "investigate and rotate credentials", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "security" }, .external_tool = "review auth/access logs for unusual IPs, times, or geolocations" },
+    .{ .id = 21, .title = "Outdated Dependency", .category = "deps", .detection = "npm/pip/cargo outdated", .action = "upgrade version", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm outdated | pip list --outdated | cargo outdated | uv pip list --outdated" },
+    .{ .id = 22, .title = "Deprecated Library", .category = "deps", .detection = "upstream marked deprecated", .action = "migrate to replacement", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm info <pkg> deprecated; check PyPI/crates.io status page" },
+    .{ .id = 23, .title = "Unmaintained Dependency", .category = "deps", .detection = "last commit > 3 years", .action = "replace library", .default_priority = "p1", .default_type = "chore", .default_effort = "l", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "check GitHub last commit date via API; npm info <pkg> time.modified" },
+    .{ .id = 24, .title = "Duplicate Libraries", .category = "deps", .detection = "multiple versions installed", .action = "consolidate version", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm ls --all | grep deduped; pip list | sort | uniq -d" },
+    .{ .id = 25, .title = "Vulnerable Transitive Dependency", .category = "deps", .detection = "nested CVE scan", .action = "update dependency tree", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm audit | pip-audit | cargo audit | osv-scanner (transitive deps)" },
+    .{ .id = 26, .title = "Lockfile Drift", .category = "deps", .detection = "mismatch with installed packages", .action = "rebuild lockfile", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm ci --dry-run; pip freeze > /tmp/freeze.txt && diff requirements.txt /tmp/freeze.txt" },
+    .{ .id = 27, .title = "Outdated Build Toolchain", .category = "deps", .detection = "compiler older than LTS", .action = "upgrade toolchain", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "rustc --version; python3 --version; node --version; go version; zig version" },
+    .{ .id = 28, .title = "Runtime EOL", .category = "deps", .detection = "runtime end-of-life version", .action = "upgrade runtime", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "check endoflife.date API for runtime EOL dates (python, node, ruby, etc.)" },
+    .{ .id = 29, .title = "Dependency Size Explosion", .category = "deps", .detection = "bundle size threshold exceeded", .action = "audit dependency", .default_priority = "p2", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm pack --dry-run; du -sh node_modules; cargo bloat" },
+    .{ .id = 30, .title = "Unused Dependency", .category = "deps", .detection = "static import analysis", .action = "remove package", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "depcheck (npm) | vulture (python) | cargo-udeps (rust)" },
+    .{ .id = 31, .title = "License Change Detection", .category = "deps", .detection = "dependency license changed in new version", .action = "review license compatibility", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "license-checker (npm) | pip-licenses | cargo-license; diff against previous" },
+    .{ .id = 32, .title = "Conflicting Version Ranges", .category = "deps", .detection = "dependency resolution conflicts", .action = "resolve version conflicts", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm ls --all 2>&1 | grep 'ERESOLVE\\|peer dep'; pip check" },
+    .{ .id = 33, .title = "Unused Peer Dependencies", .category = "deps", .detection = "peer dependency declared but unused", .action = "remove peer dependency", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm ls --all | grep 'peer dep'" },
+    .{ .id = 34, .title = "Broken Registry References", .category = "deps", .detection = "package registry URL unreachable", .action = "fix registry reference", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm ping; pip config list (check index-url reachability)" },
+    .{ .id = 35, .title = "Checksum Mismatch", .category = "deps", .detection = "package checksum mismatch on install", .action = "re-fetch and verify package", .default_priority = "p0", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm cache verify; pip hash --verify; cargo verify-project" },
+    .{ .id = 36, .title = "Incompatible Binary Architecture", .category = "deps", .detection = "native module built for wrong arch", .action = "rebuild for target architecture", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "file node_modules/**/*.node; check platform/arch in native bindings" },
+    .{ .id = 37, .title = "Outdated WASM Runtime", .category = "deps", .detection = "WASM runtime version behind stable", .action = "upgrade WASM runtime", .default_priority = "p2", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "check wasmtime/wasmer version against latest stable release" },
+    .{ .id = 38, .title = "Outdated GPU Drivers", .category = "deps", .detection = "GPU driver version behind stable", .action = "upgrade GPU drivers", .default_priority = "p2", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "nvidia-smi; check driver version against CUDA compatibility matrix" },
+    .{ .id = 39, .title = "Mirror Outage Fallback", .category = "deps", .detection = "primary package mirror unreachable", .action = "configure fallback mirror", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm ping --registry <mirror>; pip install --dry-run -i <mirror>" },
+    .{ .id = 40, .title = "Corrupted Dependency Cache", .category = "deps", .detection = "dependency cache integrity check fails", .action = "clear and rebuild cache", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "deps" }, .external_tool = "npm cache clean --force; pip cache purge; cargo clean" },
+    .{ .id = 41, .title = "High Cyclomatic Complexity", .category = "code-health", .detection = "cyclomatic complexity > 15", .action = "refactor into smaller functions", .default_priority = "p2", .default_type = "refactor", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "radon cc -a (python) | eslint --rule complexity (js) | gocyclo (go)" },
+    .{ .id = 42, .title = "File Too Large", .category = "code-health", .detection = "file > 1000 lines", .action = "split into modules", .default_priority = "p2", .default_type = "refactor", .default_effort = "l", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "" },
+    .{ .id = 43, .title = "Duplicate Code Blocks", .category = "code-health", .detection = "repeated code blocks detected", .action = "extract shared function", .default_priority = "p2", .default_type = "refactor", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "jscpd | flay (ruby) | PMD CPD (java); semgrep --config=p/duplicate-code" },
+    .{ .id = 44, .title = "Dead Code Detection", .category = "code-health", .detection = "unreachable or unused code paths", .action = "remove dead code", .default_priority = "p2", .default_type = "refactor", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "vulture (python) | ts-prune (typescript) | deadcode (go)" },
+    .{ .id = 45, .title = "Deprecated API Usage", .category = "code-health", .detection = "calls to deprecated functions/methods", .action = "migrate to replacement API", .default_priority = "p1", .default_type = "refactor", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "grep -rn '@deprecated\\|DeprecationWarning\\|DEPRECATED'" },
+    .{ .id = 46, .title = "Missing Error Handling", .category = "code-health", .detection = "unhandled exceptions or missing error checks", .action = "add error handling", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "pylint --disable=all --enable=W0702,W0703 | eslint no-empty-catch" },
+    .{ .id = 47, .title = "Logging Inconsistency", .category = "code-health", .detection = "inconsistent log levels or formats", .action = "standardize logging", .default_priority = "p2", .default_type = "refactor", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "grep -rn 'console.log\\|print(\\|log.Debug' and review log level consistency" },
+    .{ .id = 48, .title = "Excessive TODO Comments", .category = "code-health", .detection = "TODO/FIXME/HACK count exceeds threshold", .action = "address or create tickets for TODOs", .default_priority = "p2", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "" },
+    .{ .id = 49, .title = "Long Parameter Lists", .category = "code-health", .detection = "function parameters > 6", .action = "refactor to use parameter objects", .default_priority = "p2", .default_type = "refactor", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "pylint --disable=all --enable=R0913 | eslint max-params" },
+    .{ .id = 50, .title = "Circular Imports", .category = "code-health", .detection = "circular import dependency detected", .action = "restructure module dependencies", .default_priority = "p1", .default_type = "refactor", .default_effort = "l", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "python -c 'import importlib; importlib.import_module(\"pkg\")' | madge --circular (js)" },
+    .{ .id = 51, .title = "Missing Type Hints", .category = "code-health", .detection = "functions without type annotations", .action = "add type hints", .default_priority = "p2", .default_type = "refactor", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "mypy --strict | pyright; check function signatures for missing annotations" },
+    .{ .id = 52, .title = "Unused Imports", .category = "code-health", .detection = "imported modules never referenced", .action = "remove unused imports", .default_priority = "p2", .default_type = "refactor", .default_effort = "xs", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "autoflake --check (python) | eslint no-unused-vars (js)" },
+    .{ .id = 53, .title = "Inconsistent Formatting", .category = "code-health", .detection = "code style deviates from project standard", .action = "run formatter", .default_priority = "p2", .default_type = "chore", .default_effort = "xs", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "black --check (python) | prettier --check (js) | rustfmt --check (rust)" },
+    .{ .id = 54, .title = "Poor Naming Patterns", .category = "code-health", .detection = "variable/function names unclear or inconsistent", .action = "rename for clarity", .default_priority = "p2", .default_type = "refactor", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "pylint naming-convention | eslint camelcase/naming-convention" },
+    .{ .id = 55, .title = "Missing Docstrings", .category = "code-health", .detection = "public functions without documentation", .action = "add docstrings", .default_priority = "p2", .default_type = "docs", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "pydocstyle | darglint | interrogate (python)" },
+    .{ .id = 56, .title = "Nested Loops", .category = "code-health", .detection = "deeply nested loops (> 3 levels)", .action = "refactor to reduce nesting", .default_priority = "p2", .default_type = "refactor", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "review code for nested for/while loops > 3 levels deep" },
+    .{ .id = 57, .title = "Unsafe Pointer Operations", .category = "code-health", .detection = "raw pointer usage without safety checks", .action = "add bounds checking or use safe alternatives", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "clippy (rust) | cppcheck (c/c++) | review unsafe blocks" },
+    .{ .id = 58, .title = "Unbounded Recursion", .category = "code-health", .detection = "recursive function without base case limit", .action = "add recursion depth limit", .default_priority = "p1", .default_type = "code", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "review recursive functions for missing base case or depth limit" },
+    .{ .id = 59, .title = "Magic Numbers", .category = "code-health", .detection = "unexplained numeric literals in code", .action = "extract to named constants", .default_priority = "p2", .default_type = "refactor", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "pylint --disable=all --enable=W0612 | eslint no-magic-numbers" },
+    .{ .id = 60, .title = "Mutable Global State", .category = "code-health", .detection = "global variables modified at runtime", .action = "refactor to local/injected state", .default_priority = "p1", .default_type = "refactor", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "code-health" }, .external_tool = "grep -rn 'global ' (python) | review mutable module-level state" },
+    .{ .id = 61, .title = "Slow Database Query", .category = "performance", .detection = "query execution > 500ms", .action = "optimize query or add index", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "EXPLAIN ANALYZE <query>; pg_stat_statements; slow query log" },
+    .{ .id = 62, .title = "N+1 Query Pattern", .category = "performance", .detection = "repeated queries in loop", .action = "batch or join queries", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "django-debug-toolbar | bullet gem (rails) | review ORM queries in loops" },
+    .{ .id = 63, .title = "Memory Leak Detection", .category = "performance", .detection = "heap growth without release", .action = "fix memory leak", .default_priority = "p0", .default_type = "code", .default_effort = "l", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "valgrind --leak-check=full | heaptrack | node --inspect + Chrome DevTools" },
+    .{ .id = 64, .title = "High API Latency", .category = "performance", .detection = "p95 latency exceeds threshold", .action = "profile and optimize endpoint", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "check APM dashboards (Datadog, New Relic, Grafana) for p95 latency" },
+    .{ .id = 65, .title = "Cache Miss Ratio", .category = "performance", .detection = "cache miss ratio > 0.6", .action = "tune cache strategy", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "redis-cli INFO stats | memcached stats; check cache hit/miss metrics" },
+    .{ .id = 66, .title = "Large Response Payloads", .category = "performance", .detection = "API response size exceeds threshold", .action = "add pagination or compression", .default_priority = "p2", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "curl -s <api> | wc -c; check API response sizes in APM" },
+    .{ .id = 67, .title = "O(n^2) Algorithms", .category = "performance", .detection = "quadratic complexity in hot paths", .action = "replace with efficient algorithm", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "review hot-path code for nested loops; profile with py-spy/perf/flamegraph" },
+    .{ .id = 68, .title = "Unbounded Job Queue", .category = "performance", .detection = "job queue grows without limit", .action = "add backpressure or queue limits", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "check job queue metrics (Sidekiq, Celery, Bull) for queue depth trends" },
+    .{ .id = 69, .title = "Excessive Logging Overhead", .category = "performance", .detection = "high-frequency logging in hot paths", .action = "reduce log verbosity or sample", .default_priority = "p2", .default_type = "code", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "review logging in hot paths; check log volume metrics" },
+    .{ .id = 70, .title = "Slow Cold Start", .category = "performance", .detection = "service startup > threshold", .action = "optimize initialization", .default_priority = "p2", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "time service startup; profile with py-spy/perf during init" },
+    .{ .id = 71, .title = "Thread Starvation", .category = "performance", .detection = "thread pool exhaustion detected", .action = "increase pool size or reduce blocking", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "jstack (java) | py-spy dump | review thread pool configs" },
+    .{ .id = 72, .title = "Lock Contention", .category = "performance", .detection = "high lock wait times", .action = "reduce critical section scope", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "lock contention profiling; review mutex/lock usage in hot paths" },
+    .{ .id = 73, .title = "Blocking IO in Async Code", .category = "performance", .detection = "synchronous IO in async context", .action = "convert to async IO", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "review async code for sync IO calls (requests, open, subprocess)" },
+    .{ .id = 74, .title = "Oversized Images", .category = "performance", .detection = "image assets exceed size threshold", .action = "compress or resize images", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "find . -name '*.png' -o -name '*.jpg' | xargs identify -format '%f %wx%h %b\n'" },
+    .{ .id = 75, .title = "Redundant Network Calls", .category = "performance", .detection = "duplicate API calls for same data", .action = "deduplicate or cache results", .default_priority = "p2", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "review network calls in code; check for duplicate HTTP requests in APM" },
+    .{ .id = 76, .title = "Inefficient Serialization", .category = "performance", .detection = "slow serialization format in hot path", .action = "switch to efficient format", .default_priority = "p2", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "benchmark serialization (json vs msgpack vs protobuf) in hot paths" },
+    .{ .id = 77, .title = "Slow WASM Execution Path", .category = "performance", .detection = "WASM module performance below threshold", .action = "profile and optimize WASM code", .default_priority = "p2", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "wasm profiling tools; review WASM module execution times" },
+    .{ .id = 78, .title = "GPU Underutilization", .category = "performance", .detection = "GPU compute usage below capacity", .action = "optimize GPU workload distribution", .default_priority = "p2", .default_type = "code", .default_effort = "l", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "nvidia-smi dmon; review GPU utilization metrics" },
+    .{ .id = 79, .title = "Excessive Disk Writes", .category = "performance", .detection = "write IOPS exceeds threshold", .action = "batch or buffer writes", .default_priority = "p2", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "iostat; check write IOPS metrics; review fsync/flush patterns" },
+    .{ .id = 80, .title = "Poor Pagination", .category = "performance", .detection = "unbounded result sets returned", .action = "implement cursor-based pagination", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "performance" }, .external_tool = "review API endpoints for unbounded SELECT/find queries without LIMIT" },
+    .{ .id = 81, .title = "Missing Index", .category = "database", .detection = "frequent query without supporting index", .action = "add database index", .default_priority = "p1", .default_type = "code", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "EXPLAIN ANALYZE <query>; pg_stat_user_tables (seq_scan count); slow query log" },
+    .{ .id = 82, .title = "Unused Index", .category = "database", .detection = "index with zero reads", .action = "drop unused index", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "pg_stat_user_indexes (idx_scan = 0); MySQL sys.schema_unused_indexes" },
+    .{ .id = 83, .title = "Table Bloat", .category = "database", .detection = "dead tuple ratio exceeds threshold", .action = "vacuum or repack table", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "pg_stat_user_tables (n_dead_tup); VACUUM VERBOSE" },
+    .{ .id = 84, .title = "Fragmented Index", .category = "database", .detection = "index fragmentation > threshold", .action = "rebuild index", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "pg_stat_user_indexes; DBCC SHOWCONTIG (SQL Server); OPTIMIZE TABLE (MySQL)" },
+    .{ .id = 85, .title = "Orphan Records", .category = "database", .detection = "records referencing deleted parents", .action = "clean up orphan records", .default_priority = "p2", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "SELECT orphans with LEFT JOIN ... WHERE parent.id IS NULL" },
+    .{ .id = 86, .title = "Duplicate Rows", .category = "database", .detection = "duplicate records detected", .action = "deduplicate data", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "SELECT columns, COUNT(*) GROUP BY columns HAVING COUNT(*) > 1" },
+    .{ .id = 87, .title = "Data Format Drift", .category = "database", .detection = "column data deviates from expected format", .action = "normalize data format", .default_priority = "p2", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "sample column data and check format consistency; pg_typeof()" },
+    .{ .id = 88, .title = "Backup Failure", .category = "database", .detection = "last backup older than policy threshold", .action = "investigate and fix backup", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "pg_stat_archiver; check backup tool logs (pg_dump, mysqldump, mongodump)" },
+    .{ .id = 89, .title = "Failed Migration", .category = "database", .detection = "migration in failed/partial state", .action = "fix and rerun migration", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "check migration status table; rails db:migrate:status | alembic current" },
+    .{ .id = 90, .title = "Slow Join Queries", .category = "database", .detection = "join query exceeding time threshold", .action = "optimize join or denormalize", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "EXPLAIN ANALYZE for JOIN queries; check pg_stat_statements for slow joins" },
+    .{ .id = 91, .title = "Oversized JSON Columns", .category = "database", .detection = "JSON column average size exceeds threshold", .action = "normalize into relational columns", .default_priority = "p2", .default_type = "refactor", .default_effort = "l", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "SELECT avg(pg_column_size(json_col)) FROM table; check JSON column sizes" },
+    .{ .id = 92, .title = "Unused Tables", .category = "database", .detection = "tables with no recent reads or writes", .action = "archive or drop unused tables", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "pg_stat_user_tables (last_autovacuum, seq_scan, idx_scan for zero-activity tables)" },
+    .{ .id = 93, .title = "Table Scan Alerts", .category = "database", .detection = "full table scan on large table", .action = "add index or optimize query", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "pg_stat_user_tables (seq_scan on large tables); MySQL slow query log" },
+    .{ .id = 94, .title = "Encoding Mismatch", .category = "database", .detection = "mixed character encodings across tables", .action = "standardize encoding", .default_priority = "p2", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "SELECT table_name, character_set_name FROM information_schema.columns" },
+    .{ .id = 95, .title = "Unbounded Table Growth", .category = "database", .detection = "table row count growing without retention policy", .action = "implement retention or archival", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC" },
+    .{ .id = 96, .title = "Missing Partitioning", .category = "database", .detection = "large table without partitioning scheme", .action = "add table partitioning", .default_priority = "p2", .default_type = "chore", .default_effort = "l", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "check table sizes; review partitioning strategy for tables > 10M rows" },
+    .{ .id = 97, .title = "Outdated Statistics", .category = "database", .detection = "query planner statistics stale", .action = "analyze/update statistics", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "pg_stat_user_tables (last_analyze); ANALYZE VERBOSE" },
+    .{ .id = 98, .title = "Corrupted Index Pages", .category = "database", .detection = "index corruption detected", .action = "rebuild corrupted index", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "pg_catalog.pg_index (indisvalid = false); REINDEX" },
+    .{ .id = 99, .title = "Replication Lag", .category = "database", .detection = "replica behind primary by threshold", .action = "investigate replication lag", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "SELECT * FROM pg_stat_replication; check replica lag metrics" },
+    .{ .id = 100, .title = "Foreign Key Inconsistencies", .category = "database", .detection = "orphaned foreign key references", .action = "fix referential integrity", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "database" }, .external_tool = "check foreign key constraints; SELECT with LEFT JOIN for orphaned references" },
+    .{ .id = 101, .title = "Container Image Outdated", .category = "infrastructure", .detection = "base image version behind latest", .action = "update container base image", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "docker pull <image>:latest --dry-run; compare Dockerfile FROM tag to latest" },
+    .{ .id = 102, .title = "Missing OS Security Patches", .category = "infrastructure", .detection = "OS packages with available security updates", .action = "apply security patches", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "apt list --upgradable | yum check-update | apk version -l '<'" },
+    .{ .id = 103, .title = "Low Disk Space", .category = "infrastructure", .detection = "disk usage > 85%", .action = "clean up or expand storage", .default_priority = "p0", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "df -h; kubectl top nodes; cloud console storage metrics" },
+    .{ .id = 104, .title = "CPU Saturation", .category = "infrastructure", .detection = "sustained CPU usage > 90%", .action = "scale or optimize workload", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "top; kubectl top pods; cloud monitoring CPU metrics" },
+    .{ .id = 105, .title = "Memory Pressure", .category = "infrastructure", .detection = "memory usage > 90% or OOM events", .action = "investigate memory usage and scale", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "free -h; kubectl top pods; check OOM events in dmesg/journal" },
+    .{ .id = 106, .title = "CrashLoop Pods", .category = "infrastructure", .detection = "pod in CrashLoopBackOff state", .action = "diagnose and fix crash loop", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "kubectl get pods --field-selector=status.phase!=Running; kubectl describe pod" },
+    .{ .id = 107, .title = "Orphan Containers", .category = "infrastructure", .detection = "stopped containers consuming resources", .action = "remove orphan containers", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "docker ps -a --filter status=exited; docker system df" },
+    .{ .id = 108, .title = "Stale Storage Volumes", .category = "infrastructure", .detection = "unattached volumes with no recent access", .action = "clean up stale volumes", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "kubectl get pv --no-headers | grep Available; aws ec2 describe-volumes --filters Name=status,Values=available" },
+    .{ .id = 109, .title = "Expired DNS Records", .category = "infrastructure", .detection = "DNS records pointing to decommissioned resources", .action = "update DNS records", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "dig <hostname>; nslookup; check DNS records against active infrastructure" },
+    .{ .id = 110, .title = "Misconfigured Load Balancer", .category = "infrastructure", .detection = "health check failures or routing errors", .action = "fix load balancer configuration", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "kubectl describe ingress; aws elb describe-target-health; health check logs" },
+    .{ .id = 111, .title = "High Network Latency", .category = "infrastructure", .detection = "inter-service latency exceeds threshold", .action = "investigate network path", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "ping; traceroute; mtr; check network latency metrics in monitoring" },
+    .{ .id = 112, .title = "Unused Cloud Resources", .category = "infrastructure", .detection = "idle VMs, IPs, or load balancers", .action = "decommission unused resources", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "aws ec2 describe-instances --filters Name=instance-state-name,Values=stopped; cloud cost reports" },
+    .{ .id = 113, .title = "Broken CI Runners", .category = "infrastructure", .detection = "CI runner offline or failing jobs", .action = "repair or replace CI runner", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "check CI dashboard for offline runners; gitlab-runner verify; gh api /repos/{owner}/{repo}/actions/runners" },
+    .{ .id = 114, .title = "Container Restart Loops", .category = "infrastructure", .detection = "container restart count exceeds threshold", .action = "diagnose restart cause", .default_priority = "p0", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "docker inspect --format='{{.RestartCount}}'; kubectl describe pod (restart count)" },
+    .{ .id = 115, .title = "Unused Security Groups", .category = "infrastructure", .detection = "security groups not attached to resources", .action = "remove unused security groups", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "aws ec2 describe-security-groups; check for unattached security groups" },
+    .{ .id = 116, .title = "Expired API Gateway Cert", .category = "infrastructure", .detection = "API gateway certificate expiring soon", .action = "renew API gateway certificate", .default_priority = "p0", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "aws apigateway get-domain-names; check certificate expiry dates" },
+    .{ .id = 117, .title = "Infrastructure Drift", .category = "infrastructure", .detection = "live config differs from IaC definitions", .action = "reconcile infrastructure state", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "terraform plan | pulumi preview | compare live state vs IaC definitions" },
+    .{ .id = 118, .title = "Registry Cleanup Required", .category = "infrastructure", .detection = "container registry storage exceeds threshold", .action = "prune old images from registry", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "docker system df; cloud registry storage metrics; skopeo list-tags" },
+    .{ .id = 119, .title = "Log Storage Overflow", .category = "infrastructure", .detection = "log volume approaching storage limit", .action = "rotate or archive logs", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "du -sh /var/log; check log rotation config; cloud logging storage metrics" },
+    .{ .id = 120, .title = "Node Version Drift", .category = "infrastructure", .detection = "cluster nodes running different versions", .action = "align node versions", .default_priority = "p1", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "infrastructure" }, .external_tool = "kubectl get nodes -o wide; compare node versions across cluster" },
+    .{ .id = 121, .title = "Missing Metrics", .category = "observability", .detection = "service endpoints without metrics instrumentation", .action = "add metrics collection", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "observability" }, .external_tool = "review service endpoints for metrics instrumentation; check Prometheus targets" },
+    .{ .id = 122, .title = "Broken Alerts", .category = "observability", .detection = "alert rules referencing missing metrics", .action = "fix alert configuration", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "observability" }, .external_tool = "promtool check rules; review alert rule YAML for missing metric references" },
+    .{ .id = 123, .title = "Missing Distributed Tracing", .category = "observability", .detection = "services without trace propagation", .action = "add trace instrumentation", .default_priority = "p1", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "observability" }, .external_tool = "review code for trace context propagation (OpenTelemetry, Jaeger, Zipkin)" },
+    .{ .id = 124, .title = "Log Retention Overflow", .category = "observability", .detection = "log retention exceeding storage policy", .action = "adjust retention policy", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "observability" }, .external_tool = "check log retention policies; du -sh log storage; cloud logging config" },
+    .{ .id = 125, .title = "Missing Uptime Checks", .category = "observability", .detection = "production endpoints without health monitoring", .action = "add uptime checks", .default_priority = "p1", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "observability" }, .external_tool = "review uptime monitoring config (Pingdom, UptimeRobot, cloud health checks)" },
+    .{ .id = 126, .title = "Alert Fatigue Detection", .category = "observability", .detection = "high volume of non-actionable alerts", .action = "tune alert thresholds", .default_priority = "p2", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "observability" }, .external_tool = "review alert history for frequency; check PagerDuty/Opsgenie alert volume" },
+    .{ .id = 127, .title = "Missing Error Classification", .category = "observability", .detection = "errors logged without categorization", .action = "add error classification", .default_priority = "p2", .default_type = "code", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "observability" }, .external_tool = "review error logging for categorization (error codes, error types)" },
+    .{ .id = 128, .title = "Inconsistent Log Schema", .category = "observability", .detection = "log format varies across services", .action = "standardize log schema", .default_priority = "p2", .default_type = "chore", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "observability" }, .external_tool = "compare log formats across services; check structured logging config" },
+    .{ .id = 129, .title = "Missing Service Map", .category = "observability", .detection = "no service dependency map available", .action = "generate service map", .default_priority = "p2", .default_type = "docs", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "observability" }, .external_tool = "review service dependencies; generate from traces or config (Kiali, Jaeger)" },
+    .{ .id = 130, .title = "Outdated Dashboards", .category = "observability", .detection = "dashboards referencing deprecated metrics", .action = "update dashboards", .default_priority = "p2", .default_type = "chore", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "observability" }, .external_tool = "review Grafana/Datadog dashboards for deprecated metric references" },
+    .{ .id = 131, .title = "Failing Tests", .category = "testing", .detection = "test suite has persistent failures", .action = "fix failing tests", .default_priority = "p0", .default_type = "tests", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "testing" }, .external_tool = "run test suite and check exit code; review CI pipeline history for failures" },
+    .{ .id = 132, .title = "Flaky Tests", .category = "testing", .detection = "tests with intermittent pass/fail", .action = "stabilize flaky tests", .default_priority = "p1", .default_type = "tests", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "testing" }, .external_tool = "run tests multiple times; check CI history for intermittent failures" },
+    .{ .id = 133, .title = "Missing Regression Tests", .category = "testing", .detection = "recent bug fixes without regression tests", .action = "add regression tests", .default_priority = "p1", .default_type = "tests", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "testing" }, .external_tool = "review recent bug-fix commits for associated test additions" },
+    .{ .id = 134, .title = "Low Coverage Modules", .category = "testing", .detection = "modules below coverage threshold", .action = "add tests for low coverage areas", .default_priority = "p2", .default_type = "tests", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "testing" }, .external_tool = "coverage run -m pytest; nyc; go test -cover; review coverage report" },
+    .{ .id = 135, .title = "Outdated Snapshot Tests", .category = "testing", .detection = "snapshot tests not updated after code changes", .action = "update snapshot tests", .default_priority = "p2", .default_type = "tests", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "testing" }, .external_tool = "jest --updateSnapshot --dry-run; check snapshot diff against code changes" },
+    .{ .id = 136, .title = "Slow Test Suite", .category = "testing", .detection = "test suite execution exceeds threshold", .action = "optimize slow tests", .default_priority = "p2", .default_type = "tests", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "testing" }, .external_tool = "time test suite execution; pytest --durations=10; jest --verbose" },
+    .{ .id = 137, .title = "Missing Integration Tests", .category = "testing", .detection = "critical paths without integration test coverage", .action = "add integration tests", .default_priority = "p1", .default_type = "tests", .default_effort = "l", .labels = &[_][]const u8{ "maintenance", "testing" }, .external_tool = "review critical user paths for integration test coverage" },
+    .{ .id = 138, .title = "Broken CI Pipeline", .category = "testing", .detection = "CI pipeline failing on main branch", .action = "fix CI pipeline", .default_priority = "p0", .default_type = "tests", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "testing" }, .external_tool = "check CI pipeline status on main branch; review recent CI logs" },
+    .{ .id = 139, .title = "Missing Edge Case Tests", .category = "testing", .detection = "boundary conditions untested", .action = "add edge case tests", .default_priority = "p2", .default_type = "tests", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "testing" }, .external_tool = "review test cases for boundary values, null inputs, empty collections" },
+    .{ .id = 140, .title = "Inconsistent Test Data", .category = "testing", .detection = "test fixtures with hardcoded or stale data", .action = "standardize test data", .default_priority = "p2", .default_type = "tests", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "testing" }, .external_tool = "review test fixtures for hardcoded dates, IDs, or stale data" },
+    .{ .id = 141, .title = "Outdated API Docs", .category = "docs", .detection = "API documentation does not match implementation", .action = "update API documentation", .default_priority = "p1", .default_type = "docs", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "docs" }, .external_tool = "diff API implementation against API docs; check OpenAPI spec freshness" },
+    .{ .id = 142, .title = "Broken Documentation Links", .category = "docs", .detection = "dead links in documentation", .action = "fix broken links", .default_priority = "p2", .default_type = "docs", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "docs" }, .external_tool = "" },
+    .{ .id = 143, .title = "Outdated Onboarding Docs", .category = "docs", .detection = "onboarding guide references removed features", .action = "update onboarding documentation", .default_priority = "p1", .default_type = "docs", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "docs" }, .external_tool = "review onboarding docs against current setup/install process" },
+    .{ .id = 144, .title = "Missing Architecture Diagram", .category = "docs", .detection = "no architecture diagram or diagram is outdated", .action = "create or update architecture diagram", .default_priority = "p2", .default_type = "docs", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "docs" }, .external_tool = "check for architecture diagrams in docs/; compare against current system" },
+    .{ .id = 145, .title = "Missing CLI Examples", .category = "docs", .detection = "CLI commands without usage examples", .action = "add CLI usage examples", .default_priority = "p2", .default_type = "docs", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "docs" }, .external_tool = "review CLI --help output against documentation examples" },
+    .{ .id = 146, .title = "Outdated Deployment Guide", .category = "docs", .detection = "deployment guide does not match current process", .action = "update deployment guide", .default_priority = "p1", .default_type = "docs", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "docs" }, .external_tool = "compare deployment docs against current deploy scripts/CI config" },
+    .{ .id = 147, .title = "Undocumented Endpoints", .category = "docs", .detection = "API endpoints without documentation", .action = "document undocumented endpoints", .default_priority = "p1", .default_type = "docs", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "docs" }, .external_tool = "list API routes and compare against documented endpoints" },
+    .{ .id = 148, .title = "Stale README", .category = "docs", .detection = "README last updated significantly before repo activity", .action = "update README", .default_priority = "p2", .default_type = "docs", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "docs" }, .external_tool = "" },
+    .{ .id = 149, .title = "Outdated SDK Docs", .category = "docs", .detection = "SDK documentation does not match current API", .action = "update SDK documentation", .default_priority = "p1", .default_type = "docs", .default_effort = "m", .labels = &[_][]const u8{ "maintenance", "docs" }, .external_tool = "diff SDK methods against API documentation; check SDK version alignment" },
+    .{ .id = 150, .title = "Missing Changelog", .category = "docs", .detection = "no changelog or changelog not updated for recent releases", .action = "update changelog", .default_priority = "p2", .default_type = "docs", .default_effort = "s", .labels = &[_][]const u8{ "maintenance", "docs" }, .external_tool = "check CHANGELOG.md last entry date vs latest release tag" },
+};
+
+const builtin_scanner_ids = [_]i32{ 2, 6, 15, 18, 42, 48, 142, 148 };
+
+fn hasBuiltinScanner(rule_id: i32) bool {
+    for (&builtin_scanner_ids) |id| {
+        if (id == rule_id) return true;
+    }
+    return false;
+}
+
+fn filterMaintenanceRules(allocator: std.mem.Allocator, cats: []const []const u8, rule_ids: []const i32) ![]const MaintenanceRule {
+    var result = std.array_list.Managed(MaintenanceRule).init(allocator);
+    for (&maintenance_rules) |rule| {
+        if (cats.len > 0) {
+            var cat_match = false;
+            for (cats) |cat| {
+                if (std.mem.eql(u8, cat, rule.category)) {
+                    cat_match = true;
+                    break;
+                }
+            }
+            if (!cat_match) continue;
+        }
+        if (rule_ids.len > 0) {
+            var id_match = false;
+            for (rule_ids) |rid| {
+                if (rid == rule.id) {
+                    id_match = true;
+                    break;
+                }
+            }
+            if (!id_match) continue;
+        }
+        try result.append(rule);
+    }
+    return result.toOwnedSlice();
+}
+
+const default_maintain_config =
+    \\# tickets/maintain.yaml
+    \\# Enable/disable categories and configure external tools for mt maintain scan.
+    \\
+    \\# Global settings
+    \\settings:
+    \\  log_file: tickets/maintain.log
+    \\  timeout: 60
+    \\  enabled: true
+    \\
+    \\# Per-category tool configuration
+    \\# Set enabled: true and provide the command for your stack.
+    \\# Use {repo} as placeholder for the repository root path.
+    \\
+    \\security:
+    \\  cve_scanner:
+    \\    enabled: false
+    \\    # command: pip-audit --format=json
+    \\  secret_scanner:
+    \\    enabled: false
+    \\    # command: gitleaks detect --source={repo} --report-format=json --no-git
+    \\  ssl_check:
+    \\    enabled: false
+    \\
+    \\deps:
+    \\  outdated_check:
+    \\    enabled: false
+    \\  license_check:
+    \\    enabled: false
+    \\  unused_deps:
+    \\    enabled: false
+    \\
+    \\code_health:
+    \\  complexity:
+    \\    enabled: false
+    \\  linter:
+    \\    enabled: false
+    \\  formatter_check:
+    \\    enabled: false
+    \\  type_check:
+    \\    enabled: false
+    \\
+    \\performance:
+    \\  profiler:
+    \\    enabled: false
+    \\  bundle_size:
+    \\    enabled: false
+    \\
+    \\database:
+    \\  migration_check:
+    \\    enabled: false
+    \\  query_analyzer:
+    \\    enabled: false
+    \\
+    \\infrastructure:
+    \\  container_scan:
+    \\    enabled: false
+    \\  k8s_health:
+    \\    enabled: false
+    \\  terraform_drift:
+    \\    enabled: false
+    \\
+    \\observability:
+    \\  prometheus_check:
+    \\    enabled: false
+    \\  alert_check:
+    \\    enabled: false
+    \\
+    \\testing:
+    \\  coverage:
+    \\    enabled: false
+    \\  test_runner:
+    \\    enabled: false
+    \\
+    \\documentation:
+    \\  link_checker:
+    \\    enabled: false
+    \\  openapi_diff:
+    \\    enabled: false
+    \\
+;
+
+const source_extensions = [_][]const u8{
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".c", ".h",
+    ".cpp", ".java", ".rb", ".sh", ".bash", ".zsh", ".yaml", ".yml",
+    ".toml", ".cfg", ".ini", ".json", ".xml", ".zig",
+};
+
+const skip_dir_names = [_][]const u8{
+    ".git", "node_modules", "__pycache__", ".venv", "venv",
+    "target", "zig-out", "zig-cache", "build", "dist", ".tox",
+};
+
+fn isMaintSkipDir(name: []const u8) bool {
+    for (&skip_dir_names) |d| {
+        if (std.mem.eql(u8, name, d)) return true;
+    }
+    return false;
+}
+
+fn hasSourceExt(name: []const u8) bool {
+    for (&source_extensions) |ext| {
+        if (name.len > ext.len and std.mem.eql(u8, name[name.len - ext.len ..], ext)) return true;
+    }
+    return false;
+}
+
+const Finding = struct {
+    file: []const u8,
+    line: usize,
+    detail: []const u8,
+};
+
+fn collectSourceFiles(allocator: std.mem.Allocator, repo: []const u8) ![][]const u8 {
+    var result = std.array_list.Managed([]const u8).init(allocator);
+    try walkSourceFiles(allocator, repo, repo, &result);
+    return result.toOwnedSlice();
+}
+
+fn walkSourceFiles(allocator: std.mem.Allocator, base: []const u8, dir_path: []const u8, result: *std.array_list.Managed([]const u8)) !void {
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+    defer dir.close();
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        const full = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        if (entry.kind == .directory) {
+            if (!isMaintSkipDir(entry.name)) {
+                try walkSourceFiles(allocator, base, full, result);
+            }
+            allocator.free(full);
+        } else if (entry.kind == .file) {
+            if (hasSourceExt(entry.name)) {
+                if (full.len > base.len + 1) {
+                    const rel = try allocator.dupe(u8, full[base.len + 1 ..]);
+                    allocator.free(full);
+                    try result.append(rel);
+                } else {
+                    try result.append(full);
+                }
+            } else {
+                allocator.free(full);
+            }
+        } else {
+            allocator.free(full);
+        }
+    }
+}
+
+fn scanExposedSecrets(allocator: std.mem.Allocator, repo: []const u8) ![]Finding {
+    const files = try collectSourceFiles(allocator, repo);
+    defer {
+        for (files) |f| allocator.free(f);
+        allocator.free(files);
+    }
+    var findings = std.array_list.Managed(Finding).init(allocator);
+    for (files) |rel| {
+        const full = try std.fs.path.join(allocator, &[_][]const u8{ repo, rel });
+        defer allocator.free(full);
+        const content = std.fs.cwd().readFileAlloc(allocator, full, 10 * 1024 * 1024) catch continue;
+        defer allocator.free(content);
+        var lineno: usize = 1;
+        var line_start: usize = 0;
+        for (content, 0..) |ch, i| {
+            const is_newline = ch == '\n';
+            const is_last = i == content.len - 1;
+            if (is_newline or is_last) {
+                const line_end = if (is_newline) i else i + 1;
+                const line = content[line_start..line_end];
+                if (containsAWSKey(line)) {
+                    try findings.append(.{ .file = try allocator.dupe(u8, rel), .line = lineno, .detail = "AWS access key pattern detected" });
+                } else if (containsHardcodedPassword(line)) {
+                    try findings.append(.{ .file = try allocator.dupe(u8, rel), .line = lineno, .detail = "hardcoded password detected" });
+                } else if (containsPrivateKey(line)) {
+                    try findings.append(.{ .file = try allocator.dupe(u8, rel), .line = lineno, .detail = "private key detected" });
+                } else if (containsHardcodedSecretKey(line)) {
+                    try findings.append(.{ .file = try allocator.dupe(u8, rel), .line = lineno, .detail = "hardcoded secret_key detected" });
+                }
+                lineno += 1;
+                line_start = i + 1;
+            }
+        }
+    }
+    return findings.toOwnedSlice();
+}
+
+fn containsAWSKey(line: []const u8) bool {
+    if (line.len < 20) return false;
+    var i: usize = 0;
+    while (i + 20 <= line.len) : (i += 1) {
+        if (std.mem.eql(u8, line[i .. i + 4], "AKIA")) {
+            var valid = true;
+            var j: usize = i + 4;
+            while (j < i + 20) : (j += 1) {
+                if (!std.ascii.isUpper(line[j]) and !std.ascii.isDigit(line[j])) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) return true;
+        }
+    }
+    return false;
+}
+
+fn containsHardcodedPassword(line: []const u8) bool {
+    const idx = std.mem.indexOf(u8, line, "password") orelse return false;
+    var i = idx + 8;
+    while (i < line.len and line[i] == ' ') : (i += 1) {}
+    if (i >= line.len or line[i] != '=') return false;
+    i += 1;
+    while (i < line.len and line[i] == ' ') : (i += 1) {}
+    if (i >= line.len) return false;
+    if (line[i] == '"' or line[i] == '\'') {
+        const quote = line[i];
+        const start = i + 1;
+        const end = std.mem.indexOfScalarPos(u8, line, start, quote) orelse return false;
+        return (end - start) >= 3;
+    }
+    return false;
+}
+
+fn containsPrivateKey(line: []const u8) bool {
+    return std.mem.indexOf(u8, line, "-----BEGIN") != null and std.mem.indexOf(u8, line, "PRIVATE KEY-----") != null;
+}
+
+fn containsHardcodedSecretKey(line: []const u8) bool {
+    const idx = std.mem.indexOf(u8, line, "secret_key") orelse return false;
+    var i = idx + 10;
+    while (i < line.len and line[i] == ' ') : (i += 1) {}
+    if (i >= line.len or line[i] != '=') return false;
+    i += 1;
+    while (i < line.len and line[i] == ' ') : (i += 1) {}
+    if (i >= line.len) return false;
+    if (line[i] == '"' or line[i] == '\'') {
+        const quote = line[i];
+        const start = i + 1;
+        const end = std.mem.indexOfScalarPos(u8, line, start, quote) orelse return false;
+        return (end - start) >= 3;
+    }
+    return false;
+}
+
+fn scanContainerRoot(allocator: std.mem.Allocator, repo: []const u8) ![]Finding {
+    var findings = std.array_list.Managed(Finding).init(allocator);
+    var dockerfiles = std.array_list.Managed([]const u8).init(allocator);
+    try findDockerfiles(allocator, repo, &dockerfiles);
+    defer {
+        for (dockerfiles.items) |f| allocator.free(f);
+        dockerfiles.deinit();
+    }
+    for (dockerfiles.items) |df| {
+        const content = std.fs.cwd().readFileAlloc(allocator, df, 1024 * 1024) catch continue;
+        defer allocator.free(content);
+        if (std.mem.indexOf(u8, content, "FROM ") != null and !containsUserDirective(content)) {
+            const rel = if (df.len > repo.len + 1) df[repo.len + 1 ..] else df;
+            try findings.append(.{
+                .file = try allocator.dupe(u8, rel),
+                .line = 0,
+                .detail = "Dockerfile missing USER directive (runs as root)",
+            });
+        }
+    }
+    return findings.toOwnedSlice();
+}
+
+fn containsUserDirective(content: []const u8) bool {
+    var i: usize = 0;
+    while (i < content.len) {
+        // Find start of line
+        while (i < content.len and (content[i] == ' ' or content[i] == '\t')) : (i += 1) {}
+        if (i + 4 < content.len and std.mem.eql(u8, content[i .. i + 4], "USER")) {
+            if (i + 4 < content.len and content[i + 4] == ' ') return true;
+        }
+        // Skip to next line
+        while (i < content.len and content[i] != '\n') : (i += 1) {}
+        if (i < content.len) i += 1;
+    }
+    return false;
+}
+
+fn findDockerfiles(allocator: std.mem.Allocator, dir_path: []const u8, results: *std.array_list.Managed([]const u8)) !void {
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+    defer dir.close();
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        const full = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        if (entry.kind == .directory) {
+            if (!std.mem.eql(u8, entry.name, ".git") and !std.mem.eql(u8, entry.name, "node_modules")) {
+                try findDockerfiles(allocator, full, results);
+            }
+            allocator.free(full);
+        } else if (entry.kind == .file) {
+            if (std.mem.startsWith(u8, entry.name, "Dockerfile")) {
+                try results.append(full);
+            } else {
+                allocator.free(full);
+            }
+        } else {
+            allocator.free(full);
+        }
+    }
+}
+
+fn scanExposedEnv(allocator: std.mem.Allocator, repo: []const u8) ![]Finding {
+    var findings = std.array_list.Managed(Finding).init(allocator);
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "git", "ls-files", "--error-unmatch", ".env" },
+        .cwd = repo,
+    }) catch {
+        return findings.toOwnedSlice();
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    if (result.term.Exited == 0) {
+        try findings.append(.{
+            .file = try allocator.dupe(u8, ".env"),
+            .line = 0,
+            .detail = ".env file is tracked in git",
+        });
+    }
+    return findings.toOwnedSlice();
+}
+
+fn scanLargeFiles(allocator: std.mem.Allocator, repo: []const u8) ![]Finding {
+    const threshold: usize = 1000;
+    const files = try collectSourceFiles(allocator, repo);
+    defer {
+        for (files) |f| allocator.free(f);
+        allocator.free(files);
+    }
+    var findings = std.array_list.Managed(Finding).init(allocator);
+    for (files) |rel| {
+        const full = try std.fs.path.join(allocator, &[_][]const u8{ repo, rel });
+        defer allocator.free(full);
+        const content = std.fs.cwd().readFileAlloc(allocator, full, 10 * 1024 * 1024) catch continue;
+        defer allocator.free(content);
+        var count: usize = 0;
+        for (content) |ch| {
+            if (ch == '\n') count += 1;
+        }
+        if (count > threshold) {
+            const detail = try std.fmt.allocPrint(allocator, "{d} lines (threshold: {d})", .{ count, threshold });
+            try findings.append(.{
+                .file = try allocator.dupe(u8, rel),
+                .line = 0,
+                .detail = detail,
+            });
+        }
+    }
+    return findings.toOwnedSlice();
+}
+
+fn scanTodoDensity(allocator: std.mem.Allocator, repo: []const u8) ![]Finding {
+    const threshold: usize = 10;
+    const files = try collectSourceFiles(allocator, repo);
+    defer {
+        for (files) |f| allocator.free(f);
+        allocator.free(files);
+    }
+    var findings = std.array_list.Managed(Finding).init(allocator);
+    const markers = [_][]const u8{ "TODO", "FIXME", "HACK", "XXX" };
+    for (files) |rel| {
+        const full = try std.fs.path.join(allocator, &[_][]const u8{ repo, rel });
+        defer allocator.free(full);
+        const content = std.fs.cwd().readFileAlloc(allocator, full, 10 * 1024 * 1024) catch continue;
+        defer allocator.free(content);
+        var count: usize = 0;
+        var line_start: usize = 0;
+        for (content, 0..) |ch, i| {
+            if (ch == '\n' or i == content.len - 1) {
+                const line = content[line_start..if (ch == '\n') i else i + 1];
+                for (&markers) |m| {
+                    if (std.mem.indexOf(u8, line, m) != null) {
+                        count += 1;
+                        break;
+                    }
+                }
+                line_start = i + 1;
+            }
+        }
+        if (count >= threshold) {
+            const detail = try std.fmt.allocPrint(allocator, "{d} TODO/FIXME/HACK comments", .{count});
+            try findings.append(.{
+                .file = try allocator.dupe(u8, rel),
+                .line = 0,
+                .detail = detail,
+            });
+        }
+    }
+    return findings.toOwnedSlice();
+}
+
+fn scanBrokenDocLinks(allocator: std.mem.Allocator, repo: []const u8) ![]Finding {
+    var findings = std.array_list.Managed(Finding).init(allocator);
+    var md_files = std.array_list.Managed([]const u8).init(allocator);
+    try findMdFiles(allocator, repo, &md_files);
+    defer {
+        for (md_files.items) |f| allocator.free(f);
+        md_files.deinit();
+    }
+    for (md_files.items) |md| {
+        const content = std.fs.cwd().readFileAlloc(allocator, md, 1024 * 1024) catch continue;
+        defer allocator.free(content);
+        const rel = if (md.len > repo.len + 1) md[repo.len + 1 ..] else md;
+        const fdir = std.fs.path.dirname(md) orelse repo;
+        var lineno: usize = 1;
+        var line_start: usize = 0;
+        for (content, 0..) |ch, i| {
+            if (ch == '\n' or i == content.len - 1) {
+                const line = content[line_start..if (ch == '\n') i else i + 1];
+                // Find markdown links [text](target)
+                var pos: usize = 0;
+                while (pos < line.len) {
+                    const bracket = std.mem.indexOfScalarPos(u8, line, pos, '[') orelse break;
+                    const close_bracket = std.mem.indexOfScalarPos(u8, line, bracket + 1, ']') orelse break;
+                    if (close_bracket + 1 < line.len and line[close_bracket + 1] == '(') {
+                        const close_paren = std.mem.indexOfScalarPos(u8, line, close_bracket + 2, ')') orelse break;
+                        const target = line[close_bracket + 2 .. close_paren];
+                        if (!std.mem.startsWith(u8, target, "http://") and
+                            !std.mem.startsWith(u8, target, "https://") and
+                            !std.mem.startsWith(u8, target, "#") and
+                            !std.mem.startsWith(u8, target, "mailto:") and
+                            target.len > 0)
+                        {
+                            // Strip fragment and query
+                            var clean = target;
+                            if (std.mem.indexOfScalar(u8, clean, '#')) |h| clean = clean[0..h];
+                            if (std.mem.indexOfScalar(u8, clean, '?')) |q| clean = clean[0..q];
+                            if (clean.len > 0) {
+                                const full_path = std.fs.path.join(allocator, &[_][]const u8{ fdir, clean }) catch {
+                                    pos = close_paren + 1;
+                                    continue;
+                                };
+                                defer allocator.free(full_path);
+                                if (!fileExists(full_path) and !dirExists(full_path)) {
+                                    const detail = std.fmt.allocPrint(allocator, "broken link to {s}", .{clean}) catch {
+                                        pos = close_paren + 1;
+                                        continue;
+                                    };
+                                    findings.append(.{
+                                        .file = allocator.dupe(u8, rel) catch {
+                                            pos = close_paren + 1;
+                                            continue;
+                                        },
+                                        .line = lineno,
+                                        .detail = detail,
+                                    }) catch {};
+                                }
+                            }
+                        }
+                        pos = close_paren + 1;
+                    } else {
+                        pos = close_bracket + 1;
+                    }
+                }
+                lineno += 1;
+                line_start = i + 1;
+            }
+        }
+    }
+    return findings.toOwnedSlice();
+}
+
+fn findMdFiles(allocator: std.mem.Allocator, dir_path: []const u8, results: *std.array_list.Managed([]const u8)) !void {
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+    defer dir.close();
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        const full = try std.fs.path.join(allocator, &[_][]const u8{ dir_path, entry.name });
+        if (entry.kind == .directory) {
+            if (!std.mem.eql(u8, entry.name, ".git") and !std.mem.eql(u8, entry.name, "node_modules")) {
+                try findMdFiles(allocator, full, results);
+            }
+            allocator.free(full);
+        } else if (entry.kind == .file) {
+            if (std.mem.endsWith(u8, entry.name, ".md")) {
+                try results.append(full);
+            } else {
+                allocator.free(full);
+            }
+        } else {
+            allocator.free(full);
+        }
+    }
+}
+
+fn scanStaleReadme(allocator: std.mem.Allocator, repo: []const u8) ![]Finding {
+    var findings = std.array_list.Managed(Finding).init(allocator);
+    const readme_path = try std.fs.path.join(allocator, &[_][]const u8{ repo, "README.md" });
+    defer allocator.free(readme_path);
+    if (!fileExists(readme_path)) {
+        try findings.append(.{
+            .file = try allocator.dupe(u8, "README.md"),
+            .line = 0,
+            .detail = "README.md does not exist",
+        });
+        return findings.toOwnedSlice();
+    }
+    const readme_stat = std.fs.cwd().statFile(readme_path) catch return findings.toOwnedSlice();
+    const readme_mtime = readme_stat.mtime;
+
+    const files = try collectSourceFiles(allocator, repo);
+    defer {
+        for (files) |f| allocator.free(f);
+        allocator.free(files);
+    }
+    var latest: i128 = 0;
+    for (files) |rel| {
+        const full = try std.fs.path.join(allocator, &[_][]const u8{ repo, rel });
+        defer allocator.free(full);
+        const stat = std.fs.cwd().statFile(full) catch continue;
+        if (stat.mtime > latest) latest = stat.mtime;
+    }
+    if (latest == 0) return findings.toOwnedSlice();
+    if (latest > readme_mtime) {
+        const diff_ns = latest - readme_mtime;
+        const days = @divFloor(diff_ns, @as(i128, 86400) * 1_000_000_000);
+        if (days > 90) {
+            const detail = try std.fmt.allocPrint(allocator, "README.md is {d} days behind latest source change", .{@as(i64, @intCast(days))});
+            try findings.append(.{
+                .file = try allocator.dupe(u8, "README.md"),
+                .line = 0,
+                .detail = detail,
+            });
+        }
+    }
+    return findings.toOwnedSlice();
+}
+
+fn runBuiltinScanner(allocator: std.mem.Allocator, rule_id: i32, repo: []const u8) !?[]Finding {
+    return switch (rule_id) {
+        2, 6 => try scanExposedSecrets(allocator, repo),
+        15 => try scanContainerRoot(allocator, repo),
+        18 => try scanExposedEnv(allocator, repo),
+        42 => try scanLargeFiles(allocator, repo),
+        48 => try scanTodoDensity(allocator, repo),
+        142 => try scanBrokenDocLinks(allocator, repo),
+        148 => try scanStaleReadme(allocator, repo),
+        else => null,
+    };
+}
+
+fn detectProjectStack(allocator: std.mem.Allocator, repo: []const u8) ![][]const u8 {
+    const checks = [_]struct { name: []const u8, markers: []const []const u8 }{
+        .{ .name = "python", .markers = &[_][]const u8{ "pyproject.toml", "setup.py", "requirements.txt", "Pipfile" } },
+        .{ .name = "node", .markers = &[_][]const u8{"package.json"} },
+        .{ .name = "rust", .markers = &[_][]const u8{"Cargo.toml"} },
+        .{ .name = "go", .markers = &[_][]const u8{"go.mod"} },
+        .{ .name = "docker", .markers = &[_][]const u8{"Dockerfile"} },
+        .{ .name = "terraform", .markers = &[_][]const u8{"main.tf"} },
+        .{ .name = "k8s", .markers = &[_][]const u8{ "k8s", "kubernetes" } },
+    };
+    var detected = std.array_list.Managed([]const u8).init(allocator);
+    for (&checks) |check| {
+        for (check.markers) |marker| {
+            const marker_path = try std.fs.path.join(allocator, &[_][]const u8{ repo, marker });
+            defer allocator.free(marker_path);
+            if (fileExists(marker_path) or dirExists(marker_path)) {
+                try detected.append(check.name);
+                break;
+            }
+        }
+    }
+    return detected.toOwnedSlice();
+}
+
+fn generateDetectedConfig(allocator: std.mem.Allocator, repo: []const u8) ![]u8 {
+    const stacks = try detectProjectStack(allocator, repo);
+    defer allocator.free(stacks);
+    var has_python = false;
+    var has_node = false;
+    var has_rust = false;
+    var has_go = false;
+    var has_docker = false;
+    var has_terraform = false;
+    var stack_names = std.array_list.Managed(u8).init(allocator);
+    defer stack_names.deinit();
+    for (stacks, 0..) |s, i| {
+        if (i > 0) try stack_names.appendSlice(", ");
+        try stack_names.appendSlice(s);
+        if (std.mem.eql(u8, s, "python")) has_python = true;
+        if (std.mem.eql(u8, s, "node")) has_node = true;
+        if (std.mem.eql(u8, s, "rust")) has_rust = true;
+        if (std.mem.eql(u8, s, "go")) has_go = true;
+        if (std.mem.eql(u8, s, "docker")) has_docker = true;
+        if (std.mem.eql(u8, s, "terraform")) has_terraform = true;
+    }
+    var buf = std.array_list.Managed(u8).init(allocator);
+    const w = buf.writer();
+    try w.print("# tickets/maintain.yaml\n# Auto-generated by mt maintain init-config --detect\n# Detected stacks: {s}\n\n", .{if (stacks.len == 0) "none" else stack_names.items});
+    try w.writeAll("settings:\n  log_file: tickets/maintain.log\n  timeout: 60\n  enabled: true\n\n");
+
+    if (has_python) {
+        try w.writeAll("security:\n  cve_scanner:\n    enabled: true\n    command: pip-audit --format=json\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ndeps:\n  outdated_check:\n    enabled: true\n    command: pip list --outdated --format=json\n\ncode_health:\n  linter:\n    enabled: true\n    command: pylint {repo} --output-format=json --exit-zero\n  formatter_check:\n    enabled: true\n    command: black --check {repo} --quiet\n\ntesting:\n  test_runner:\n    enabled: true\n    command: pytest {repo} --tb=short -q\n  coverage:\n    enabled: true\n    command: coverage run -m pytest {repo} -q && coverage json -o /dev/stdout\n\n");
+    } else if (has_node) {
+        try w.writeAll("security:\n  cve_scanner:\n    enabled: true\n    command: npm audit --json\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ndeps:\n  outdated_check:\n    enabled: true\n    command: npm outdated --json\n\ncode_health:\n  linter:\n    enabled: true\n    command: eslint src --format=json\n  formatter_check:\n    enabled: true\n    command: \"prettier --check 'src/**/*.{ts,tsx,js}'\"\n\ntesting:\n  test_runner:\n    enabled: true\n    command: npm test -- --json\n  coverage:\n    enabled: true\n    command: nyc --reporter=json npm test\n\n");
+    } else if (has_rust) {
+        try w.writeAll("security:\n  cve_scanner:\n    enabled: true\n    command: cargo audit --json\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ndeps:\n  outdated_check:\n    enabled: true\n    command: cargo outdated --format=json\n\ncode_health:\n  formatter_check:\n    enabled: true\n    command: cargo fmt --check\n\ntesting:\n  test_runner:\n    enabled: true\n    command: cargo test --message-format=json\n\n");
+    } else if (has_go) {
+        try w.writeAll("security:\n  cve_scanner:\n    enabled: true\n    command: govulncheck ./...\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ntesting:\n  test_runner:\n    enabled: true\n    command: go test ./...\n  coverage:\n    enabled: true\n    command: go test -coverprofile=coverage.out ./...\n\n");
+    } else {
+        try w.writeAll("security:\n  secret_scanner:\n    enabled: false\n    # command: gitleaks detect --source={repo} --report-format=json --no-git\n\n");
+    }
+
+    if (has_docker) {
+        try w.writeAll("infrastructure:\n  container_scan:\n    enabled: true\n    command: trivy image --format=json\n\n");
+    }
+    if (has_terraform) {
+        try w.writeAll("infrastructure:\n  terraform_drift:\n    enabled: true\n    command: terraform plan -detailed-exitcode -json\n\n");
+    }
+    try w.writeAll("documentation:\n  link_checker:\n    enabled: false\n    # command: markdown-link-check {repo}/docs/**/*.md --json\n\n");
+
+    return buf.toOwnedSlice();
+}
+
+fn loadMaintainConfig(allocator: std.mem.Allocator, repo: []const u8) ![]u8 {
+    const config_path = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets", "maintain.yaml" });
+    defer allocator.free(config_path);
+    return std.fs.cwd().readFileAlloc(allocator, config_path, 1024 * 1024) catch return try allocator.dupe(u8, "");
+}
+
+fn yamlGetValue(content: []const u8, key: []const u8) ?[]const u8 {
+    // Simple YAML key: value lookup (single level only)
+    var line_start: usize = 0;
+    for (content, 0..) |ch, i| {
+        if (ch == '\n' or i == content.len - 1) {
+            const line_end = if (ch == '\n') i else i + 1;
+            const line = content[line_start..line_end];
+            const trimmed = std.mem.trimLeft(u8, line, " \t");
+            if (std.mem.startsWith(u8, trimmed, key)) {
+                const after_key = trimmed[key.len..];
+                if (after_key.len > 0 and after_key[0] == ':') {
+                    const val = std.mem.trimLeft(u8, after_key[1..], " \t");
+                    const val_trimmed = std.mem.trimRight(u8, val, " \t\r\n");
+                    if (val_trimmed.len > 0) return val_trimmed;
+                }
+            }
+            line_start = i + 1;
+        }
+    }
+    return null;
+}
+
+fn configGetBool(content: []const u8, key: []const u8) bool {
+    const val = yamlGetValue(content, key) orelse return false;
+    return std.mem.eql(u8, val, "true");
+}
+
+const EnabledTool = struct {
+    name: []const u8,
+    command: []const u8,
+    rule_ids: []const i32,
+};
+
+const config_category_map = [_]struct { key: []const u8, slug: []const u8 }{
+    .{ .key = "security", .slug = "security" },
+    .{ .key = "deps", .slug = "deps" },
+    .{ .key = "code_health", .slug = "code-health" },
+    .{ .key = "performance", .slug = "performance" },
+    .{ .key = "database", .slug = "database" },
+    .{ .key = "infrastructure", .slug = "infrastructure" },
+    .{ .key = "observability", .slug = "observability" },
+    .{ .key = "testing", .slug = "testing" },
+    .{ .key = "documentation", .slug = "docs" },
+};
+
+const ToolRuleMapping = struct { name: []const u8, rule_ids: []const i32 };
+const config_tool_rule_map = [_]ToolRuleMapping{
+    .{ .name = "cve_scanner", .rule_ids = &[_]i32{ 1, 25 } },
+    .{ .name = "secret_scanner", .rule_ids = &[_]i32{ 2, 6 } },
+    .{ .name = "ssl_check", .rule_ids = &[_]i32{3} },
+    .{ .name = "outdated_check", .rule_ids = &[_]i32{21} },
+    .{ .name = "license_check", .rule_ids = &[_]i32{31} },
+    .{ .name = "unused_deps", .rule_ids = &[_]i32{30} },
+    .{ .name = "complexity", .rule_ids = &[_]i32{41} },
+    .{ .name = "linter", .rule_ids = &[_]i32{ 44, 45, 47 } },
+    .{ .name = "formatter_check", .rule_ids = &[_]i32{53} },
+    .{ .name = "type_check", .rule_ids = &[_]i32{55} },
+    .{ .name = "profiler", .rule_ids = &[_]i32{63} },
+    .{ .name = "bundle_size", .rule_ids = &[_]i32{29} },
+    .{ .name = "migration_check", .rule_ids = &[_]i32{89} },
+    .{ .name = "query_analyzer", .rule_ids = &[_]i32{61} },
+    .{ .name = "container_scan", .rule_ids = &[_]i32{101} },
+    .{ .name = "k8s_health", .rule_ids = &[_]i32{106} },
+    .{ .name = "terraform_drift", .rule_ids = &[_]i32{117} },
+    .{ .name = "prometheus_check", .rule_ids = &[_]i32{121} },
+    .{ .name = "alert_check", .rule_ids = &[_]i32{122} },
+    .{ .name = "coverage", .rule_ids = &[_]i32{134} },
+    .{ .name = "test_runner", .rule_ids = &[_]i32{131} },
+    .{ .name = "link_checker", .rule_ids = &[_]i32{142} },
+    .{ .name = "openapi_diff", .rule_ids = &[_]i32{141} },
+};
+
+fn getToolRuleIds(tool_name: []const u8) []const i32 {
+    for (&config_tool_rule_map) |mapping| {
+        if (std.mem.eql(u8, mapping.name, tool_name)) return mapping.rule_ids;
+    }
+    return &[_]i32{};
+}
+
+fn getEnabledExternalTools(allocator: std.mem.Allocator, config: []const u8) ![]EnabledTool {
+    // Simple YAML parsing: look for tool blocks with enabled: true and command: ...
+    // This is a simplified version that looks for patterns in the config
+    var tools = std.array_list.Managed(EnabledTool).init(allocator);
+    // For the simplified port, we parse the YAML config to find enabled tools
+    // The config structure is: category: tool_name: enabled: true/command: ...
+    // We scan line by line tracking indentation context
+    var lines_iter = std.mem.splitScalar(u8, config, '\n');
+    var current_tool: ?[]const u8 = null;
+    var tool_enabled = false;
+    var tool_command: ?[]const u8 = null;
+
+    while (lines_iter.next()) |line| {
+        const trimmed = std.mem.trimLeft(u8, line, " \t");
+        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+
+        // Count indentation
+        var indent: usize = 0;
+        for (line) |ch| {
+            if (ch == ' ') {
+                indent += 1;
+            } else break;
+        }
+
+        if (indent == 2) {
+            // Tool name level - save previous tool if valid
+            if (current_tool != null and tool_enabled and tool_command != null) {
+                try tools.append(.{
+                    .name = current_tool.?,
+                    .command = tool_command.?,
+                    .rule_ids = getToolRuleIds(current_tool.?),
+                });
+            }
+            // Parse new tool name
+            if (std.mem.indexOfScalar(u8, trimmed, ':')) |colon| {
+                current_tool = trimmed[0..colon];
+                tool_enabled = false;
+                tool_command = null;
+            }
+        } else if (indent >= 4 and current_tool != null) {
+            // Tool property
+            if (std.mem.startsWith(u8, trimmed, "enabled:")) {
+                const val = std.mem.trimLeft(u8, trimmed[8..], " \t");
+                tool_enabled = std.mem.eql(u8, val, "true");
+            } else if (std.mem.startsWith(u8, trimmed, "command:")) {
+                const val = std.mem.trimLeft(u8, trimmed[8..], " \t");
+                if (val.len > 0) tool_command = val;
+            }
+        } else if (indent == 0 and trimmed.len > 0) {
+            // Category level - save previous tool if valid
+            if (current_tool != null and tool_enabled and tool_command != null) {
+                try tools.append(.{
+                    .name = current_tool.?,
+                    .command = tool_command.?,
+                    .rule_ids = getToolRuleIds(current_tool.?),
+                });
+            }
+            current_tool = null;
+            tool_enabled = false;
+            tool_command = null;
+        }
+    }
+    // Save last tool if valid
+    if (current_tool != null and tool_enabled and tool_command != null) {
+        try tools.append(.{
+            .name = current_tool.?,
+            .command = tool_command.?,
+            .rule_ids = getToolRuleIds(current_tool.?),
+        });
+    }
+    return tools.toOwnedSlice();
+}
+
+fn runExternalTool(allocator: std.mem.Allocator, command: []const u8, repo: []const u8) !struct { code: u8, stdout: []u8, stderr: []u8 } {
+    // Replace {repo} in command
+    var cmd_buf = std.array_list.Managed(u8).init(allocator);
+    defer cmd_buf.deinit();
+    var i: usize = 0;
+    while (i < command.len) {
+        if (i + 6 <= command.len and std.mem.eql(u8, command[i .. i + 6], "{repo}")) {
+            try cmd_buf.appendSlice(repo);
+            i += 6;
+        } else {
+            try cmd_buf.append(command[i]);
+            i += 1;
+        }
+    }
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "sh", "-c", cmd_buf.items },
+        .cwd = repo,
+        .max_output_bytes = 1024 * 1024,
+    }) catch |e| {
+        return .{
+            .code = 255,
+            .stdout = try allocator.dupe(u8, ""),
+            .stderr = try std.fmt.allocPrint(allocator, "{}", .{e}),
+        };
+    };
+    const code: u8 = switch (result.term) {
+        .Exited => |ec| ec,
+        else => 255,
+    };
+    return .{
+        .code = code,
+        .stdout = result.stdout,
+        .stderr = result.stderr,
+    };
+}
+
+const ScanResult = struct {
+    rule_id: i32,
+    status: []const u8,
+    title: []const u8,
+    category: []const u8,
+    findings: []Finding,
+    reason: ?[]const u8,
+};
+
+fn scanRuleWithConfig(allocator: std.mem.Allocator, rule: MaintenanceRule, config: []const u8, repo: []const u8) !ScanResult {
+    // Try built-in scanner
+    if (try runBuiltinScanner(allocator, rule.id, repo)) |findings| {
+        const status: []const u8 = if (findings.len == 0) "pass" else "fail";
+        return .{
+            .rule_id = rule.id,
+            .status = status,
+            .title = rule.title,
+            .category = rule.category,
+            .findings = findings,
+            .reason = null,
+        };
+    }
+
+    // Try external tool
+    const ext_tools = try getEnabledExternalTools(allocator, config);
+    defer allocator.free(ext_tools);
+    for (ext_tools) |tool| {
+        for (tool.rule_ids) |rid| {
+            if (rid == rule.id) {
+                const result = try runExternalTool(allocator, tool.command, repo);
+                defer allocator.free(result.stdout);
+                defer allocator.free(result.stderr);
+                if (result.code == 0) {
+                    return .{
+                        .rule_id = rule.id,
+                        .status = "pass",
+                        .title = rule.title,
+                        .category = rule.category,
+                        .findings = &[_]Finding{},
+                        .reason = null,
+                    };
+                } else {
+                    const detail_src = if (result.stdout.len > 0) result.stdout else result.stderr;
+                    const detail_len = @min(detail_src.len, 200);
+                    const detail = try std.fmt.allocPrint(allocator, "external tool '{s}' reported issue: {s}", .{ tool.name, detail_src[0..detail_len] });
+                    var findings = try allocator.alloc(Finding, 1);
+                    findings[0] = .{
+                        .file = try allocator.dupe(u8, ""),
+                        .line = 0,
+                        .detail = detail,
+                    };
+                    return .{
+                        .rule_id = rule.id,
+                        .status = "fail",
+                        .title = rule.title,
+                        .category = rule.category,
+                        .findings = findings,
+                        .reason = null,
+                    };
+                }
+            }
+        }
+    }
+
+    // No scanner
+    var reason_buf = std.array_list.Managed(u8).init(allocator);
+    try reason_buf.appendSlice("no built-in scanner");
+    if (rule.external_tool.len > 0) {
+        try reason_buf.appendSlice("; try: ");
+        try reason_buf.appendSlice(rule.external_tool);
+    }
+    return .{
+        .rule_id = rule.id,
+        .status = "skip",
+        .title = rule.title,
+        .category = rule.category,
+        .findings = &[_]Finding{},
+        .reason = try reason_buf.toOwnedSlice(),
+    };
+}
+
+fn formatSuggestionBody(allocator: std.mem.Allocator, rule: MaintenanceRule) ![]u8 {
+    var buf = std.array_list.Managed(u8).init(allocator);
+    const w = buf.writer();
+    try w.print("## Goal\nInvestigate and remediate: {s}\n\n## Detection Heuristic\n{s}\n", .{ rule.title, rule.detection });
+    if (rule.external_tool.len > 0) {
+        try w.print("\n## External Tool\n```\n{s}\n```\n", .{rule.external_tool});
+    }
+    try w.print("\n## Recommended Action\n{s}\n\n## Acceptance Criteria\n- [ ] Run detection heuristic against codebase\n- [ ] Fix any issues found, or close ticket if none exist\n- [ ] Verify fix passes CI\n\n## Notes\nAuto-generated by `mt maintain create` (rule {d}, category: {s})\n", .{ rule.action, rule.id, rule.category });
+    return buf.toOwnedSlice();
+}
+
+fn formatFindingBody(allocator: std.mem.Allocator, rule: MaintenanceRule, findings: []const Finding) ![]u8 {
+    var buf = std.array_list.Managed(u8).init(allocator);
+    const w = buf.writer();
+    try w.print("## Goal\nFix detected issue: {s}\n\n## Findings\n", .{rule.title});
+    for (findings) |f| {
+        if (f.line > 0) {
+            try w.print("- `{s}` (line {d}): {s}\n", .{ f.file, f.line, f.detail });
+        } else {
+            try w.print("- `{s}` (file): {s}\n", .{ f.file, f.detail });
+        }
+    }
+    try w.print("\n## Recommended Action\n{s}\n\n## Acceptance Criteria\n- [ ] Address all findings listed above\n- [ ] Verify fix passes CI\n\n## Notes\nAuto-detected by `mt maintain scan` (rule {d}, category: {s})\n", .{ rule.action, rule.id, rule.category });
+    return buf.toOwnedSlice();
+}
+
+fn collectExistingMaintTags(allocator: std.mem.Allocator, repo: []const u8) ![][]const u8 {
+    const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
+    defer allocator.free(tdir);
+    var tags = std.array_list.Managed([]const u8).init(allocator);
+    if (!dirExists(tdir)) return tags.toOwnedSlice();
+    var dir = std.fs.cwd().openDir(tdir, .{ .iterate = true }) catch return tags.toOwnedSlice();
+    defer dir.close();
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!isTicketFilename(entry.name)) continue;
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ tdir, entry.name });
+        defer allocator.free(path);
+        const content = std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024) catch continue;
+        defer allocator.free(content);
+        const status = parseMetaField(content, "status") orelse "ready";
+        if (std.mem.eql(u8, status, "done")) continue;
+        // Parse tags field for maint-rule-* entries
+        const tags_field = parseMetaField(content, "tags") orelse continue;
+        if (tags_field.len < 2) continue;
+        // Parse [tag1, tag2] format
+        const inner = if (tags_field[0] == '[' and tags_field[tags_field.len - 1] == ']')
+            tags_field[1 .. tags_field.len - 1]
+        else
+            continue;
+        var tag_iter = std.mem.splitScalar(u8, inner, ',');
+        while (tag_iter.next()) |raw_tag| {
+            const tag = std.mem.trim(u8, raw_tag, " \t'\"");
+            if (std.mem.startsWith(u8, tag, "maint-rule-")) {
+                try tags.append(try allocator.dupe(u8, tag));
+            }
+        }
+    }
+    return tags.toOwnedSlice();
+}
+
+fn hasMaintTag(tags: []const []const u8, tag: []const u8) bool {
+    for (tags) |t| {
+        if (std.mem.eql(u8, t, tag)) return true;
+    }
+    return false;
+}
+
+fn cmdMaintain(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+    if (cmd_args.len == 0) {
+        std.debug.print("usage: mt-zig maintain <subcommand>\nsubcommands: init-config, doctor, list, scan, create\n", .{});
+        std.process.exit(2);
+    }
+
+    const subcmd = cmd_args[0];
+    const sub_args = cmd_args[1..];
+
+    if (std.mem.eql(u8, subcmd, "init-config")) {
+        try cmdMaintainInitConfig(allocator, sub_args);
+    } else if (std.mem.eql(u8, subcmd, "doctor")) {
+        try cmdMaintainDoctor(allocator);
+    } else if (std.mem.eql(u8, subcmd, "list")) {
+        try cmdMaintainList(allocator, sub_args);
+    } else if (std.mem.eql(u8, subcmd, "scan")) {
+        try cmdMaintainScan(allocator, sub_args);
+    } else if (std.mem.eql(u8, subcmd, "create")) {
+        try cmdMaintainCreate(allocator, sub_args);
+    } else {
+        std.debug.print("unknown maintain subcommand: {s}\n", .{subcmd});
+        std.process.exit(2);
+    }
+}
+
+fn cmdMaintainInitConfig(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
+    const force = hasFlag(args, "--force");
+    const detect = hasFlag(args, "--detect");
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
+    defer allocator.free(tdir);
+    std.fs.cwd().makePath(tdir) catch {};
+    const config_path = try std.fs.path.join(allocator, &[_][]const u8{ tdir, "maintain.yaml" });
+    defer allocator.free(config_path);
+    if (fileExists(config_path) and !force) {
+        std.debug.print("config already exists: {s}\nuse --force to overwrite\n", .{config_path});
+        std.process.exit(1);
+    }
+    if (detect) {
+        const stacks = try detectProjectStack(allocator, repo);
+        defer allocator.free(stacks);
+        std.debug.print("detected stacks: ", .{});
+        if (stacks.len == 0) {
+            std.debug.print("none\n", .{});
+        } else {
+            for (stacks, 0..) |s, i| {
+                if (i > 0) std.debug.print(", ", .{});
+                std.debug.print("{s}", .{s});
+            }
+            std.debug.print("\n", .{});
+        }
+        const content = try generateDetectedConfig(allocator, repo);
+        defer allocator.free(content);
+        try writeFileText(config_path, content);
+    } else {
+        try writeFileText(config_path, default_maintain_config);
+    }
+    try printStdout(allocator, "{s}\n", .{config_path});
+}
+
+fn cmdMaintainDoctor(allocator: std.mem.Allocator) !void {
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const config = try loadMaintainConfig(allocator, repo);
+    defer allocator.free(config);
+    if (config.len == 0) {
+        std.debug.print("no tickets/maintain.yaml found. run: mt maintain init-config\n", .{});
+        std.process.exit(2);
+    }
+    const ext_tools = try getEnabledExternalTools(allocator, config);
+    defer allocator.free(ext_tools);
+    if (ext_tools.len == 0) {
+        std.debug.print("no external tools enabled in maintain.yaml\n", .{});
+        return;
+    }
+    var ok_count: usize = 0;
+    var fail_count: usize = 0;
+    for (ext_tools) |tool| {
+        // Extract binary name from command
+        var binary_end: usize = 0;
+        while (binary_end < tool.command.len and tool.command[binary_end] != ' ') : (binary_end += 1) {}
+        const binary = tool.command[0..binary_end];
+        // Check if binary exists using which
+        const result = std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &[_][]const u8{ "which", binary },
+        }) catch {
+            try printStdout(allocator, "[MISS]  {s:<20} {s} -- not found on PATH\n", .{ tool.name, binary });
+            fail_count += 1;
+            continue;
+        };
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+        if (result.term.Exited == 0) {
+            const found = std.mem.trimRight(u8, result.stdout, "\n\r ");
+            try printStdout(allocator, "[OK]    {s:<20} {s} -> {s}\n", .{ tool.name, binary, found });
+            ok_count += 1;
+        } else {
+            try printStdout(allocator, "[MISS]  {s:<20} {s} -- not found on PATH\n", .{ tool.name, binary });
+            fail_count += 1;
+        }
+    }
+    std.debug.print("\n{d} tool(s) checked: {d} available, {d} missing\n", .{ ok_count + fail_count, ok_count, fail_count });
+    if (fail_count > 0) std.process.exit(1);
+}
+
+fn cmdMaintainList(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
+    var cats = std.array_list.Managed([]const u8).init(allocator);
+    defer cats.deinit();
+    var rule_ids = std.array_list.Managed(i32).init(allocator);
+    defer rule_ids.deinit();
+    try parseMaintainFilterArgs(args, &cats, &rule_ids);
+
+    const rules = try filterMaintenanceRules(allocator, cats.items, rule_ids.items);
+    defer allocator.free(rules);
+    if (rules.len == 0) {
+        std.debug.print("no rules match the given filters.\n", .{});
+        std.process.exit(1);
+    }
+    for (rules) |rule| {
+        const scanner_tag: []const u8 = if (hasBuiltinScanner(rule.id)) "built-in" else "external";
+        try printStdout(allocator, "  {d:>3}  [{s:<16}] {s}  ({s})\n", .{ rule.id, rule.category, rule.title, scanner_tag });
+        try printStdout(allocator, "        detection: {s}\n", .{rule.detection});
+        if (rule.external_tool.len > 0) {
+            try printStdout(allocator, "        tool: {s}\n", .{rule.external_tool});
+        }
+    }
+}
+
+fn parseMaintainFilterArgs(args: []const [:0]u8, cats: *std.array_list.Managed([]const u8), rule_ids: *std.array_list.Managed(i32)) !void {
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--category") and i + 1 < args.len) {
+            i += 1;
+            try cats.append(args[i]);
+        } else if (std.mem.eql(u8, args[i], "--rule") and i + 1 < args.len) {
+            i += 1;
+            const rid = std.fmt.parseInt(i32, args[i], 10) catch continue;
+            try rule_ids.append(rid);
+        }
+    }
+}
+
+fn cmdMaintainScan(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
+    var cats = std.array_list.Managed([]const u8).init(allocator);
+    defer cats.deinit();
+    var rule_ids = std.array_list.Managed(i32).init(allocator);
+    defer rule_ids.deinit();
+    try parseMaintainFilterArgs(args, &cats, &rule_ids);
+
+    const all = hasFlag(args, "--all");
+    const diff = hasFlag(args, "--diff");
+    const fix = hasFlag(args, "--fix");
+    const format = getOptValue(args, "--format") orelse "text";
+    const profile = getOptValue(args, "--profile");
+
+    if (profile) |prof| {
+        if (std.mem.eql(u8, prof, "ci")) {
+            for (&[_][]const u8{ "security", "code-health", "testing" }) |cat| {
+                var found = false;
+                for (cats.items) |existing| {
+                    if (std.mem.eql(u8, existing, cat)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) try cats.append(cat);
+            }
+        } else if (std.mem.eql(u8, prof, "nightly")) {
+            for (&maint_categories) |cat| {
+                var found = false;
+                for (cats.items) |existing| {
+                    if (std.mem.eql(u8, existing, cat)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) try cats.append(cat);
+            }
+        } else {
+            std.debug.print("unknown profile: {s}\n", .{prof});
+            std.process.exit(2);
+        }
+    }
+
+    if (cats.items.len == 0 and rule_ids.items.len == 0 and !all) {
+        std.debug.print("error: --category, --rule, --all, or --profile required for scanning.\nhint: mt maintain list  (to browse rules first)\n", .{});
+        std.process.exit(2);
+    }
+
+    var scan_cats = cats;
+    if (all) {
+        scan_cats.clearRetainingCapacity();
+        for (&maint_categories) |cat| try scan_cats.append(cat);
+    }
+
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const rules = try filterMaintenanceRules(allocator, scan_cats.items, rule_ids.items);
+    defer allocator.free(rules);
+    if (rules.len == 0) {
+        std.debug.print("no rules match the given filters.\n", .{});
+        std.process.exit(1);
+    }
+
+    const config = try loadMaintainConfig(allocator, repo);
+    defer allocator.free(config);
+
+    var results = std.array_list.Managed(ScanResult).init(allocator);
+    defer results.deinit();
+    for (rules) |rule| {
+        try results.append(try scanRuleWithConfig(allocator, rule, config, repo));
+    }
+
+    // --diff (simplified: just show all results, diff logic requires JSON persistence)
+    _ = diff;
+
+    // --fix
+    if (fix) {
+        const ext_tools = try getEnabledExternalTools(allocator, config);
+        defer allocator.free(ext_tools);
+        for (ext_tools) |tool| {
+            // Check if any failed rules match this tool
+            for (results.items) |r| {
+                if (std.mem.eql(u8, r.status, "fail")) {
+                    for (tool.rule_ids) |trid| {
+                        if (trid == r.rule_id) {
+                            // Would run fix command here
+                            std.debug.print("[FIX]  would run fix for tool: {s}\n", .{tool.name});
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Output
+    if (std.mem.eql(u8, format, "json")) {
+        try printStdout(allocator, "[", .{});
+        for (results.items, 0..) |r, ri| {
+            if (ri > 0) try printStdout(allocator, ",", .{});
+            try printStdout(allocator, "\n  {{\"rule_id\": {d}, \"status\": \"{s}\", \"title\": \"{s}\", \"category\": \"{s}\"", .{ r.rule_id, r.status, r.title, r.category });
+            if (r.findings.len > 0) {
+                try printStdout(allocator, ", \"findings\": [", .{});
+                for (r.findings, 0..) |f, fi| {
+                    if (fi > 0) try printStdout(allocator, ", ", .{});
+                    try printStdout(allocator, "{{\"file\": \"{s}\", \"line\": {d}, \"detail\": \"{s}\"}}", .{ f.file, f.line, f.detail });
+                }
+                try printStdout(allocator, "]", .{});
+            }
+            if (r.reason) |reason| {
+                try printStdout(allocator, ", \"reason\": \"{s}\"", .{reason});
+            }
+            try printStdout(allocator, "}}", .{});
+        }
+        try printStdout(allocator, "\n]\n", .{});
+    } else {
+        for (results.items) |r| {
+            if (std.mem.eql(u8, r.status, "fail")) {
+                try printStdout(allocator, "[FAIL]  rule {d:>3}: {s} -- {d} finding(s)\n", .{ r.rule_id, r.title, r.findings.len });
+                for (r.findings) |f| {
+                    if (f.line > 0) {
+                        try printStdout(allocator, "        {s}:{d}: {s}\n", .{ f.file, f.line, f.detail });
+                    } else {
+                        try printStdout(allocator, "        {s}: {s}\n", .{ f.file, f.detail });
+                    }
+                }
+            } else if (std.mem.eql(u8, r.status, "pass")) {
+                try printStdout(allocator, "[PASS]  rule {d:>3}: {s} -- ok\n", .{ r.rule_id, r.title });
+            } else {
+                try printStdout(allocator, "[SKIP]  rule {d:>3}: {s} -- {s}\n", .{ r.rule_id, r.title, r.reason orelse "no built-in scanner" });
+            }
+        }
+    }
+
+    var fail_count: usize = 0;
+    var pass_count: usize = 0;
+    var skip_count: usize = 0;
+    for (results.items) |r| {
+        if (std.mem.eql(u8, r.status, "fail")) fail_count += 1;
+        if (std.mem.eql(u8, r.status, "pass")) pass_count += 1;
+        if (std.mem.eql(u8, r.status, "skip")) skip_count += 1;
+    }
+    std.debug.print("\n{d} rule(s) scanned: {d} failed, {d} passed, {d} skipped\n", .{ results.items.len, fail_count, pass_count, skip_count });
+    if (fail_count > 0) std.process.exit(1);
+}
+
+fn cmdMaintainCreate(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
+    var cats = std.array_list.Managed([]const u8).init(allocator);
+    defer cats.deinit();
+    var rule_ids = std.array_list.Managed(i32).init(allocator);
+    defer rule_ids.deinit();
+    try parseMaintainFilterArgs(args, &cats, &rule_ids);
+
+    const all = hasFlag(args, "--all");
+    const dry_run = hasFlag(args, "--dry-run");
+    const skip_scan = hasFlag(args, "--skip-scan");
+    const priority_override = getOptValue(args, "--priority");
+    const owner = getOptValue(args, "--owner");
+
+    if (cats.items.len == 0 and rule_ids.items.len == 0 and !all) {
+        std.debug.print("error: --category, --rule, or --all required.\nhint: mt maintain scan --category <cat>  (to scan first)\n", .{});
+        std.process.exit(2);
+    }
+
+    var scan_cats = cats;
+    if (all) {
+        scan_cats.clearRetainingCapacity();
+        for (&maint_categories) |cat| try scan_cats.append(cat);
+    }
+
+    const repo = try findRepoRoot(allocator);
+    defer allocator.free(repo);
+    const tdir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets" });
+    defer allocator.free(tdir);
+    std.fs.cwd().makePath(tdir) catch {};
+
+    const rules = try filterMaintenanceRules(allocator, scan_cats.items, rule_ids.items);
+    defer allocator.free(rules);
+    if (rules.len == 0) {
+        std.debug.print("no rules match the given filters.\n", .{});
+        std.process.exit(1);
+    }
+
+    const config = try loadMaintainConfig(allocator, repo);
+    defer allocator.free(config);
+
+    // Scan (unless --skip-scan)
+    var scan_results = std.AutoHashMap(i32, ScanResult).init(allocator);
+    defer scan_results.deinit();
+    if (!skip_scan) {
+        for (rules) |rule| {
+            try scan_results.put(rule.id, try scanRuleWithConfig(allocator, rule, config, repo));
+        }
+    }
+
+    // Collect existing maint tags
+    const existing_tags = try collectExistingMaintTags(allocator, repo);
+    defer {
+        for (existing_tags) |t| allocator.free(t);
+        allocator.free(existing_tags);
+    }
+
+    var created: usize = 0;
+    var skipped_dedup: usize = 0;
+    var skipped_pass: usize = 0;
+
+    for (rules) |rule| {
+        const tag = try std.fmt.allocPrint(allocator, "maint-rule-{d}", .{rule.id});
+        defer allocator.free(tag);
+        if (hasMaintTag(existing_tags, tag)) {
+            skipped_dedup += 1;
+            continue;
+        }
+
+        const scan = scan_results.get(rule.id);
+        if (scan) |s| {
+            if (std.mem.eql(u8, s.status, "pass")) {
+                skipped_pass += 1;
+                continue;
+            }
+        }
+
+        const body = if (scan) |s| blk: {
+            if (std.mem.eql(u8, s.status, "fail") and s.findings.len > 0) {
+                break :blk try formatFindingBody(allocator, rule, s.findings);
+            }
+            break :blk try formatSuggestionBody(allocator, rule);
+        } else try formatSuggestionBody(allocator, rule);
+        defer allocator.free(body);
+
+        if (dry_run) {
+            const label: []const u8 = if (scan != null and std.mem.eql(u8, scan.?.status, "fail")) "findings" else "suggestion";
+            try printStdout(allocator, "[dry-run] [{s}] [MAINT-{d:0>3}] {s}\n", .{ label, rule.id, rule.title });
+            created += 1;
+            continue;
+        }
+
+        const tid = try nextTicketIdForRepo(allocator, repo);
+        defer allocator.free(tid);
+        const pri = priority_override orelse rule.default_priority;
+
+        // Build labels string
+        var labels_buf = std.array_list.Managed(u8).init(allocator);
+        defer labels_buf.deinit();
+        try labels_buf.append('[');
+        for (rule.labels, 0..) |l, li| {
+            if (li > 0) try labels_buf.appendSlice(", ");
+            try labels_buf.appendSlice(l);
+        }
+        if (rule.labels.len > 0) try labels_buf.appendSlice(", ");
+        try labels_buf.appendSlice("auto-maintenance]");
+
+        // Build tags string
+        const tags_str = try std.fmt.allocPrint(allocator, "[maint-rule-{d}, maint-cat-{s}]", .{ rule.id, rule.category });
+        defer allocator.free(tags_str);
+
+        const title = try std.fmt.allocPrint(allocator, "[MAINT-{d:0>3}] {s}", .{ rule.id, rule.title });
+        defer allocator.free(title);
+
+        const today = try todayIsoDate(allocator);
+        defer allocator.free(today);
+
+        const owner_str: []const u8 = owner orelse "null";
+
+        const text = try std.fmt.allocPrint(allocator,
+            \\---
+            \\id: {s}
+            \\title: {s}
+            \\status: ready
+            \\priority: {s}
+            \\type: {s}
+            \\effort: {s}
+            \\labels: {s}
+            \\tags: {s}
+            \\owner: {s}
+            \\created: {s}
+            \\updated: {s}
+            \\depends_on: []
+            \\branch: null
+            \\retry_count: 0
+            \\retry_limit: 3
+            \\allocated_to: null
+            \\allocated_at: null
+            \\lease_expires_at: null
+            \\last_error: null
+            \\last_attempted_at: null
+            \\---
+            \\
+            \\{s}
+        , .{ tid, title, pri, rule.default_type, rule.default_effort, labels_buf.items, tags_str, owner_str, today, today, body });
+        defer allocator.free(text);
+
+        const file_name = try std.fmt.allocPrint(allocator, "{s}.md", .{tid});
+        defer allocator.free(file_name);
+        const path = try std.fs.path.join(allocator, &[_][]const u8{ tdir, file_name });
+        defer allocator.free(path);
+        try writeFileText(path, text);
+        try printStdout(allocator, "{s}\n", .{path});
+        created += 1;
+    }
+
+    const would_be: []const u8 = if (dry_run) "would be " else "";
+    std.debug.print("{d} ticket(s) {s}created, {d} skipped (duplicates), {d} skipped (scan passed)\n", .{ created, would_be, skipped_dedup, skipped_pass });
+}
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -3185,5 +4807,6 @@ pub fn main() !void {
         .validate => try cmdValidate(allocator, args[2..]),
         .report => try cmdReport(allocator, args[2..]),
         .version => try cmdVersion(allocator, args[2..]),
+        .maintain => try cmdMaintain(allocator, args[2..]),
     }
 }
