@@ -4410,7 +4410,7 @@ fn cmdMaintainCreate(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
 
         if (dry_run) {
             const label: []const u8 = if (scan != null and std.mem.eql(u8, scan.?.status, "fail")) "findings" else "suggestion";
-            try printStdout(allocator, "[dry-run] [{s}] [MAINT-{d:0>3}] {s}\n", .{ label, rule.id, rule.title });
+            try printStdout(allocator, "[dry-run] [{s}] [MAINT-{d:0>3}] {s}\n", .{ label, @as(u32, @intCast(rule.id)), rule.title });
             created += 1;
             continue;
         }
@@ -4434,7 +4434,7 @@ fn cmdMaintainCreate(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
         const tags_str = try std.fmt.allocPrint(allocator, "[maint-rule-{d}, maint-cat-{s}]", .{ rule.id, rule.category });
         defer allocator.free(tags_str);
 
-        const title = try std.fmt.allocPrint(allocator, "[MAINT-{d:0>3}] {s}", .{ rule.id, rule.title });
+        const title = try std.fmt.allocPrint(allocator, "[MAINT-{d:0>3}] {s}", .{ @as(u32, @intCast(rule.id)), rule.title });
         defer allocator.free(title);
 
         const today = try todayIsoDate(allocator);
