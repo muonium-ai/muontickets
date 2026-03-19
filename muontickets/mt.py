@@ -2736,6 +2736,65 @@ _CONFIG_TOOL_RULE_MAP: Dict[str, List[int]] = {
 }
 
 
+def _parse_nested_yaml(text: str) -> Dict[str, Any]:
+    """Parse a simple nested YAML config (up to 3 levels of indentation).
+
+    This handles the maintain.yaml format without requiring PyYAML:
+        settings:
+          log_file: tickets/maintain.log
+          timeout: 60
+        security:
+          cve_scanner:
+            enabled: true
+            command: echo ok
+    """
+    root: Dict[str, Any] = {}
+    stack: List[tuple] = []  # (indent, dict_ref)
+
+    def _coerce(v: str) -> Any:
+        if v.lower() in ("null", "none", "~", ""):
+            return None
+        if v.lower() == "true":
+            return True
+        if v.lower() == "false":
+            return False
+        if re.fullmatch(r"-?\d+", v):
+            return int(v)
+        if re.fullmatch(r"-?\d+\.\d+", v):
+            return float(v)
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            return v[1:-1]
+        return v
+
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if ":" not in stripped:
+            continue
+
+        indent = len(raw) - len(raw.lstrip())
+        k, v = stripped.split(":", 1)
+        k = k.strip()
+        v = v.strip()
+
+        # Pop stack entries at same or deeper indent
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+
+        target = stack[-1][1] if stack else root
+
+        if not v:
+            # Key with no value -> nested dict
+            child: Dict[str, Any] = {}
+            target[k] = child
+            stack.append((indent, child))
+        else:
+            target[k] = _coerce(v)
+
+    return root
+
+
 def _load_maintain_config(repo: str) -> Dict[str, Any]:
     """Load tickets/maintain.yaml if it exists, return empty dict otherwise."""
     config_path = os.path.join(repo, "tickets", "maintain.yaml")
@@ -2748,7 +2807,7 @@ def _load_maintain_config(repo: str) -> Dict[str, Any]:
             import yaml  # type: ignore
             return yaml.safe_load(text) or {}
         except ImportError:
-            return load_yaml(text)
+            return _parse_nested_yaml(text)
     except OSError:
         return {}
 
