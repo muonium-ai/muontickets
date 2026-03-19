@@ -103,6 +103,42 @@ class QueueAllocationTests(unittest.TestCase):
             self.assertEqual(no_candidate.returncode, 3)
             self.assertIn("no allocatable tickets found", no_candidate.stderr)
 
+    def test_queue_completion_clears_lease_metadata(self) -> None:
+        """After allocate-task -> needs_review -> done, active lease fields
+        must be cleared so completed tickets don't look actively leased."""
+        with tempfile.TemporaryDirectory() as td:
+            workdir = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(workdir), check=True)
+
+            self.assertEqual(self.run_cli(workdir, "init").returncode, 0)
+            self.assertEqual(self.run_cli(workdir, "new", "Queue Complete").returncode, 0)
+
+            tid = "T-000002"
+            ticket_path = workdir / "tickets" / f"{tid}.md"
+
+            # Allocate — lease fields should be populated
+            alloc = self.run_cli(workdir, "allocate-task", "--owner", "agent-q")
+            self.assertEqual(alloc.returncode, 0)
+            self.assertNotEqual(self._meta_field(ticket_path, "allocated_to"), "null")
+            self.assertNotEqual(self._meta_field(ticket_path, "lease_expires_at"), "null")
+
+            # Transition to needs_review — lease fields should be cleared
+            self.assertEqual(self.run_cli(workdir, "set-status", tid, "needs_review").returncode, 0)
+            self.assertEqual(self._meta_field(ticket_path, "allocated_to"), "null")
+            self.assertEqual(self._meta_field(ticket_path, "allocated_at"), "null")
+            self.assertEqual(self._meta_field(ticket_path, "lease_expires_at"), "null")
+            self.assertEqual(self._meta_field(ticket_path, "last_attempted_at"), "null")
+
+            # Transition to done — lease fields should still be null
+            self.assertEqual(self.run_cli(workdir, "done", tid).returncode, 0)
+            self.assertEqual(self._meta_field(ticket_path, "allocated_to"), "null")
+            self.assertEqual(self._meta_field(ticket_path, "allocated_at"), "null")
+            self.assertEqual(self._meta_field(ticket_path, "lease_expires_at"), "null")
+            self.assertEqual(self._meta_field(ticket_path, "last_attempted_at"), "null")
+
+            # validate should pass
+            self.assertEqual(self.run_cli(workdir, "validate").returncode, 0)
+
     def test_new_ignores_nested_git_submodule_ticket_ids(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workdir = Path(td)

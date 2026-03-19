@@ -1517,6 +1517,13 @@ def cmd_set_status(args: argparse.Namespace) -> int:
         meta["owner"] = None
         meta["branch"] = None
 
+    # Clear active lease metadata when leaving live queue execution
+    if new in ("needs_review", "done"):
+        meta["allocated_to"] = None
+        meta["allocated_at"] = None
+        meta["lease_expires_at"] = None
+        meta["last_attempted_at"] = None
+
     meta["status"] = new
     meta["updated"] = now_utc_iso()
     t.meta = meta
@@ -1536,6 +1543,11 @@ def cmd_done(args: argparse.Namespace) -> int:
 
     meta["status"] = "done"
     meta["updated"] = now_utc_iso()
+    # Clear active lease metadata when completing queue execution
+    meta["allocated_to"] = None
+    meta["allocated_at"] = None
+    meta["lease_expires_at"] = None
+    meta["last_attempted_at"] = None
     t.meta = meta
     write_ticket(t)
     print(f"done {args.id}")
