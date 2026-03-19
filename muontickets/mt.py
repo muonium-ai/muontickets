@@ -1469,6 +1469,16 @@ def cmd_claim(args: argparse.Namespace) -> int:
         eprint(f"Refusing to claim: dependencies not done: {missing}. Use --ignore-deps to override.")
         return 2
 
+    # WIP limit gate
+    if not args.force:
+        claimed_count = 0
+        for m in id_to_meta.values():
+            if m.get("status") == "claimed" and (m.get("owner") or "") == args.owner:
+                claimed_count += 1
+        if claimed_count >= args.max_claimed_per_owner:
+            eprint(f"owner {args.owner!r} already has {claimed_count} claimed tickets (max {args.max_claimed_per_owner}).")
+            return 2
+
     meta["status"] = "claimed"
     meta["owner"] = args.owner
     meta["branch"] = args.branch.strip() if args.branch else _default_branch(meta)
@@ -1527,15 +1537,26 @@ def cmd_set_status(args: argparse.Namespace) -> int:
             branch = _default_branch(meta)
         meta["branch"] = branch.strip() if branch else _default_branch(meta)
 
+        tickets = load_all_tickets(repo)
+        id_to_meta = {normalize_meta(x.meta).get("id"): normalize_meta(x.meta)
+                      for x in tickets if "_parse_error" not in x.meta}
+
         if not getattr(args, "ignore_deps", False):
-            tickets = load_all_tickets(repo)
-            id_to_meta = {normalize_meta(x.meta).get("id"): normalize_meta(x.meta)
-                          for x in tickets if "_parse_error" not in x.meta}
             ok, missing = deps_satisfied(meta, id_to_meta)
             if not ok:
                 eprint(f"Refusing: dependencies not done: {missing}. "
                        "Use --ignore-deps to override.")
                 return 2
+
+        # WIP limit gate
+        claimed_count = 0
+        for m in id_to_meta.values():
+            if m.get("status") == "claimed" and (m.get("owner") or "") == owner:
+                claimed_count += 1
+        max_wip = getattr(args, "max_claimed_per_owner", 2)
+        if claimed_count >= max_wip:
+            eprint(f"owner {owner!r} already has {claimed_count} claimed tickets (max {max_wip}).")
+            return 2
 
     if new == "ready" and args.clear_owner:
         meta["owner"] = None
@@ -3565,6 +3586,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_claim.add_argument("--branch", default="", help="Branch name")
     p_claim.add_argument("--ignore-deps", action="store_true")
     p_claim.add_argument("--force", action="store_true")
+    p_claim.add_argument("--max-claimed-per-owner", type=int, default=2, help="Per-owner WIP limit (default: 2)")
     p_claim.set_defaults(func=cmd_claim)
 
     p_comment = sub.add_parser("comment", help="Append a progress log entry.")
@@ -3580,6 +3602,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ss.add_argument("--owner", default=None, help="Owner (required when transitioning to claimed without existing owner)")
     p_ss.add_argument("--branch", default=None, help="Branch name (auto-generated if omitted)")
     p_ss.add_argument("--ignore-deps", action="store_true", help="Skip dependency check when transitioning to claimed")
+    p_ss.add_argument("--max-claimed-per-owner", type=int, default=2, help="Per-owner WIP limit (default: 2)")
     p_ss.set_defaults(func=cmd_set_status)
 
     p_done = sub.add_parser("done", help="Mark ticket done (expects needs_review).")
