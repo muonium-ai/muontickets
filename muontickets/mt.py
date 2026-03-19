@@ -1513,6 +1513,30 @@ def cmd_set_status(args: argparse.Namespace) -> int:
             eprint(f"Refusing: {msg}. Use --force to override.")
             return 2
 
+    # Enforce claimed-status invariants (same as claim command)
+    if new == "claimed" and not args.force:
+        owner = getattr(args, "owner", None) or meta.get("owner")
+        if not owner:
+            eprint("Refusing: transitioning to 'claimed' requires an owner. "
+                   "Use --owner or claim the ticket instead.")
+            return 2
+        meta["owner"] = owner
+
+        branch = getattr(args, "branch", None) or meta.get("branch")
+        if not branch:
+            branch = _default_branch(meta)
+        meta["branch"] = branch.strip() if branch else _default_branch(meta)
+
+        if not getattr(args, "ignore_deps", False):
+            tickets = load_all_tickets(repo)
+            id_to_meta = {normalize_meta(x.meta).get("id"): normalize_meta(x.meta)
+                          for x in tickets if "_parse_error" not in x.meta}
+            ok, missing = deps_satisfied(meta, id_to_meta)
+            if not ok:
+                eprint(f"Refusing: dependencies not done: {missing}. "
+                       "Use --ignore-deps to override.")
+                return 2
+
     if new == "ready" and args.clear_owner:
         meta["owner"] = None
         meta["branch"] = None
@@ -3553,6 +3577,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ss.add_argument("status", choices=DEFAULT_STATES)
     p_ss.add_argument("--force", action="store_true")
     p_ss.add_argument("--clear-owner", action="store_true", help="When setting to ready, clear owner/branch")
+    p_ss.add_argument("--owner", default=None, help="Owner (required when transitioning to claimed without existing owner)")
+    p_ss.add_argument("--branch", default=None, help="Branch name (auto-generated if omitted)")
+    p_ss.add_argument("--ignore-deps", action="store_true", help="Skip dependency check when transitioning to claimed")
     p_ss.set_defaults(func=cmd_set_status)
 
     p_done = sub.add_parser("done", help="Mark ticket done (expects needs_review).")
