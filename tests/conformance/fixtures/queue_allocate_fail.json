@@ -22,7 +22,7 @@
     },
     {
       "name": "first failure requeue",
-      "args": ["fail-task", "T-000002", "--error", "attempt-1", "--retry-limit", "3"],
+      "args": ["fail-task", "T-000002", "--owner", "agent-q", "--error", "attempt-1", "--retry-limit", "3"],
       "expect_exit": 0,
       "expect_output_contains": ["re-queued", "1/3"]
     },
@@ -34,7 +34,7 @@
     },
     {
       "name": "second failure requeue",
-      "args": ["fail-task", "T-000002", "--error", "attempt-2", "--retry-limit", "3"],
+      "args": ["fail-task", "T-000002", "--owner", "agent-q", "--error", "attempt-2", "--retry-limit", "3"],
       "expect_exit": 0,
       "expect_output_contains": ["re-queued", "2/3"]
     },
@@ -46,7 +46,7 @@
     },
     {
       "name": "third failure moves to errors",
-      "args": ["fail-task", "T-000002", "--error", "attempt-3", "--retry-limit", "3"],
+      "args": ["fail-task", "T-000002", "--owner", "agent-q", "--error", "attempt-3", "--retry-limit", "3"],
       "expect_exit": 0,
       "expect_output_contains": ["moved to tickets/errors/T-000002.md"]
     },

@@ -2252,6 +2252,14 @@ def cmd_fail_task(args: argparse.Namespace) -> int:
         eprint(f"Refusing to fail task: status is {meta.get('status')!r} (expected 'claimed'). Use --force to override.")
         return 2
 
+    # Verify caller identity matches current owner/allocated_to
+    if not args.force:
+        current_owner = meta.get("allocated_to") or meta.get("owner")
+        if current_owner and args.owner != current_owner:
+            eprint(f"Refusing to fail task: caller {args.owner!r} does not match "
+                   f"current owner/allocated_to {current_owner!r}. Use --force to override.")
+            return 2
+
     retry_count = int(meta.get("retry_count") or 0) + 1
     retry_limit_raw = args.retry_limit if args.retry_limit is not None else meta.get("retry_limit")
     retry_limit = int(retry_limit_raw or 3)
@@ -3661,9 +3669,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_fail = sub.add_parser("fail-task", help="Record failed attempt, increment retry counter, and re-queue or escalate to errors.")
     p_fail.add_argument("id")
+    p_fail.add_argument("--owner", required=True, help="Caller identity (must match ticket owner/allocated_to)")
     p_fail.add_argument("--error", required=True, help="Error summary for retry incident log")
     p_fail.add_argument("--retry-limit", type=int, default=None, help="Override retry limit for this ticket")
-    p_fail.add_argument("--force", action="store_true", help="Allow fail-task even when status is not claimed")
+    p_fail.add_argument("--force", action="store_true", help="Allow fail-task even when status is not claimed or owner mismatches")
     p_fail.set_defaults(func=cmd_fail_task)
 
     p_claim = sub.add_parser("claim", help="Claim a specific ticket.")
