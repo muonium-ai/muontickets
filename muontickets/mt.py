@@ -935,6 +935,11 @@ def join_frontmatter(meta: Dict[str, Any], body: str) -> str:
     fm = dump_yaml(meta)
     return f"{FRONTMATTER_BOUNDARY}\n{fm}\n{FRONTMATTER_BOUNDARY}\n\n{body.rstrip()}\n"
 
+def ticket_id_from_path(path: str) -> Optional[str]:
+    """Extract ticket ID from filename, e.g. 'T-000114' from '.../T-000114.md'."""
+    m = TICKET_FILE_RE.match(os.path.basename(path))
+    return m.group(1) if m else None
+
 def read_ticket(path: str) -> Ticket:
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -942,6 +947,11 @@ def read_ticket(path: str) -> Ticket:
     return Ticket(path=path, meta=meta, body=body)
 
 def write_ticket(t: Ticket) -> None:
+    file_id = ticket_id_from_path(t.path)
+    meta_id = t.meta.get("id")
+    if file_id and meta_id and file_id != meta_id:
+        raise ValueError(
+            f"Filename/frontmatter ID mismatch: file={file_id}, id={meta_id}")
     content = join_frontmatter(t.meta, t.body)
     directory = os.path.dirname(t.path) or "."
     os.makedirs(directory, exist_ok=True)
@@ -1236,7 +1246,12 @@ def find_ticket_by_id(repo: str, tid: str) -> Ticket:
     path = os.path.join(tickets_dir(repo), f"{tid}.md")
     if not os.path.exists(path):
         raise FileNotFoundError(f"Ticket not found: {path}")
-    return read_ticket(path)
+    t = read_ticket(path)
+    meta_id = normalize_meta(t.meta).get("id")
+    if meta_id and meta_id != tid:
+        raise ValueError(
+            f"Filename/frontmatter ID mismatch: file={tid}, id={meta_id}")
+    return t
 
 def deps_satisfied(meta: Dict[str, Any], id_to_meta: Dict[str, Dict[str, Any]]) -> Tuple[bool, List[str]]:
     missing = []
@@ -1870,6 +1885,11 @@ def cmd_validate(args: argparse.Namespace) -> int:
             errors.append(f"{os.path.basename(t.path)}: {meta['_parse_error']}")
             continue
         meta = normalize_meta(meta)
+
+        file_id = ticket_id_from_path(t.path)
+        meta_id = meta.get("id")
+        if file_id and meta_id and file_id != meta_id:
+            errors.append(f"{os.path.basename(t.path)}: filename/frontmatter ID mismatch: file={file_id}, id={meta_id}")
 
         errs = validate_against_schema(meta, schema)
         for e in errs:
