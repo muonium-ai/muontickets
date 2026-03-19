@@ -2073,7 +2073,7 @@ def cmd_allocate_task(args: argparse.Namespace) -> int:
     meta["owner"] = args.owner
     meta["allocated_to"] = args.owner
     meta["allocated_at"] = now_utc_iso()
-    meta["lease_expires_at"] = lease_until.replace(microsecond=0).isoformat() + "Z"
+    meta["lease_expires_at"] = lease_until.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     meta["last_attempted_at"] = now_utc_iso()
     meta["updated"] = now_utc_iso()
     meta["score"] = float(score)
