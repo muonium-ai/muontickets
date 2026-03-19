@@ -124,17 +124,32 @@ def load_yaml(text: str) -> Dict[str, Any]:
         return obj
     except Exception:
         data: Dict[str, Any] = {}
+        current_list_key: Optional[str] = None
         for raw in text.splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
+            # Block-style list item: "- value"
+            if line.startswith("- ") and current_list_key is not None:
+                item = line[2:].strip().strip('"').strip("'")
+                if item:
+                    data[current_list_key].append(item)
+                continue
+            # Any non-list-item line ends the current list context
+            current_list_key = None
             if ":" not in line:
                 continue
             k, v = line.split(":", 1)
             k = k.strip()
             v = v.strip()
-            if v.lower() in ("null", "none", "~", ""):
+            if v.lower() in ("null", "none", "~"):
                 data[k] = None
+                continue
+            if v == "":
+                # Could be start of a block-style list or a null value;
+                # assume block list and let list-item lines fill it.
+                data[k] = []
+                current_list_key = k
                 continue
             if v.startswith("[") and v.endswith("]"):
                 inner = v[1:-1].strip()
@@ -154,6 +169,8 @@ def load_yaml(text: str) -> Dict[str, Any]:
                 except Exception:
                     pass
             data[k] = v
+        # Convert any remaining empty block-list placeholders that got
+        # no items back to empty list (they already are [])
         return data
 
 def dump_yaml(data: Dict[str, Any]) -> str:
