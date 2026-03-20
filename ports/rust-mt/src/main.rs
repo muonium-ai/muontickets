@@ -612,8 +612,11 @@ fn write_last_ticket_number(repo_root: &Path, number: u32) -> Result<()> {
 
 fn next_ticket_id_for_repo(repo_root: &Path) -> Result<String> {
     let tracked = read_last_ticket_number(repo_root).unwrap_or(0);
-    let scanned = scan_max_ticket_number(repo_root)?;
-    let base = tracked.max(scanned);
+    let base = if tracked > 0 {
+        tracked
+    } else {
+        scan_max_ticket_number(repo_root)?
+    };
     let next = base + 1;
     write_last_ticket_number(repo_root, next)?;
     Ok(format!("T-{next:06}"))
