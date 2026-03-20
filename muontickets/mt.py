@@ -178,7 +178,17 @@ def load_yaml(text: str) -> Dict[str, Any]:
 def dump_yaml(data: Dict[str, Any]) -> str:
     try:
         import yaml  # type: ignore
-        return yaml.safe_dump(data, sort_keys=False).strip()
+
+        class FlowListDumper(yaml.SafeDumper):
+            pass
+
+        FlowListDumper.add_representer(
+            list,
+            lambda dumper, data: dumper.represent_sequence(
+                "tag:yaml.org,2002:seq", data, flow_style=True
+            ),
+        )
+        return yaml.dump(data, Dumper=FlowListDumper, sort_keys=False).strip()
     except Exception:
         def fmt(v: Any) -> str:
             if v is None:
