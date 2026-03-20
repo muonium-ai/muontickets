@@ -42,7 +42,9 @@ Note on dependencies:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
+import fcntl
 import glob as _glob
 import json
 import os
@@ -213,6 +215,34 @@ def archive_dir(repo_root: str) -> str:
 
 def errors_dir(repo_root: str) -> str:
     return os.path.join(repo_root, "tickets", "errors")
+
+
+LOCK_FILENAME = ".mt.lock"
+
+
+@contextlib.contextmanager
+def repo_lock(repo: str):
+    """Acquire an exclusive inter-process lock for the tickets directory."""
+    lock_path = os.path.join(tickets_dir(repo), LOCK_FILENAME)
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def with_repo_lock(fn: Callable) -> Callable:
+    """Decorator: acquire repo-level exclusive lock before executing a writer command."""
+    import functools
+    @functools.wraps(fn)
+    def wrapper(args: argparse.Namespace) -> int:
+        repo = find_repo_root()
+        with repo_lock(repo):
+            return fn(args)
+    return wrapper
 
 def backlogs_dir(repo_root: str) -> str:
     return os.path.join(repo_root, "tickets", "backlogs")
@@ -1344,6 +1374,7 @@ This repository uses MuonTickets for agent-friendly coordination.
             print(f"updated {last_ticket_id_path(repo)} to T-{scanned:06d}")
     return 0
 
+@with_repo_lock
 def cmd_new(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     tdir = tickets_dir(repo)
@@ -1486,6 +1517,7 @@ def _default_branch(meta: Dict[str, Any]) -> str:
     slug = slug[:40] if slug else "task"
     return f"bug/{str(meta.get('id','')).lower()}-{slug}"
 
+@with_repo_lock
 def cmd_claim(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     t = find_ticket_by_id(repo, args.id)
@@ -1530,6 +1562,7 @@ def append_progress_log(body: str, line: str) -> str:
         body = body.rstrip() + "\n\n" + marker + "\n"
     return body.rstrip() + f"\n- {today_str()}: {line}\n"
 
+@with_repo_lock
 def cmd_comment(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     t = find_ticket_by_id(repo, args.id)
@@ -1541,6 +1574,7 @@ def cmd_comment(args: argparse.Namespace) -> int:
     print(f"commented on {args.id}")
     return 0
 
+@with_repo_lock
 def cmd_set_status(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     t = find_ticket_by_id(repo, args.id)
@@ -1611,6 +1645,7 @@ def cmd_set_status(args: argparse.Namespace) -> int:
     print(f"{args.id}: {old} -> {new}")
     return 0
 
+@with_repo_lock
 def cmd_done(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     t = find_ticket_by_id(repo, args.id)
@@ -1678,6 +1713,7 @@ def _compute_archive_safe_leaf_set(repo: str, exclude_id: Optional[str] = None) 
 
     return sorted([tid for tid in done_ids if tid not in active_dep_targets])
 
+@with_repo_lock
 def cmd_archive(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     t = find_ticket_by_id(repo, args.id)
@@ -2018,6 +2054,7 @@ def cmd_graph(args: argparse.Namespace) -> int:
             print(f"{dep} -> {tid}")
     return 0
 
+@with_repo_lock
 def cmd_pick(args: argparse.Namespace) -> int:
     """
     Pick the best ready ticket for this agent and claim it.
@@ -2129,6 +2166,7 @@ def cmd_pick(args: argparse.Namespace) -> int:
         print(f"picked {tid} (score {score:.1f}) -> claimed as {args.owner} (branch: {meta['branch']})")
     return 0
 
+@with_repo_lock
 def cmd_allocate_task(args: argparse.Namespace) -> int:
     """
     Queue-style allocation primitive.
@@ -2263,6 +2301,7 @@ def cmd_allocate_task(args: argparse.Namespace) -> int:
         print(tid)
     return 0
 
+@with_repo_lock
 def cmd_fail_task(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     t = find_ticket_by_id(repo, args.id)
