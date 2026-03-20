@@ -1672,9 +1672,27 @@ def _is_active_status(status: Any) -> bool:
     return isinstance(status, str) and status in DEFAULT_STATES and status != "done"
 
 def _collect_active_dependents(repo: str, ticket_id: str) -> List[str]:
+    """Find active tickets whose depends_on includes ticket_id.
+
+    Optimised: reads raw file content and skips full YAML parsing for files
+    that do not mention ticket_id at all (the common case at scale).
+    """
     dependents: List[str] = []
-    for candidate in load_all_tickets(repo):
-        cmeta = candidate.meta
+    tdir = tickets_dir(repo)
+    for path in iter_ticket_files(tdir):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                raw = fh.read()
+        except Exception:
+            continue
+        # Fast reject: if the ticket ID string does not appear anywhere in
+        # the file, it cannot be in depends_on — skip expensive YAML parse.
+        if ticket_id not in raw:
+            continue
+        try:
+            cmeta, _ = split_frontmatter(raw)
+        except Exception:
+            continue
         if "_parse_error" in cmeta:
             continue
         cmeta = normalize_meta(cmeta)
