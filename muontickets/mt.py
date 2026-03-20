@@ -1746,7 +1746,9 @@ def validate_depends(tickets: List[Ticket], archived_ids: Optional[set[str]] = N
         meta = normalize_meta(meta)
         tid = meta.get("id")
         for dep in meta.get("depends_on") or []:
-            if dep not in existing:
+            if dep == tid:
+                errs.append(f"{tid} depends_on itself")
+            elif dep not in existing:
                 if dep in archived:
                     errs.append(
                         f"{tid} depends_on archived ticket {dep} "
@@ -1755,6 +1757,48 @@ def validate_depends(tickets: List[Ticket], archived_ids: Optional[set[str]] = N
                 else:
                     errs.append(f"{tid} depends_on missing ticket {dep}")
     return errs
+
+def validate_dependency_cycles(tickets: List[Ticket]) -> List[str]:
+    adj: Dict[str, List[str]] = {}
+    for t in tickets:
+        if "_parse_error" in t.meta:
+            continue
+        m = normalize_meta(t.meta)
+        tid = m.get("id")
+        deps = [d for d in (m.get("depends_on") or []) if d != tid]
+        adj[tid] = deps
+
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: Dict[str, int] = {tid: WHITE for tid in adj}
+    reported: set[str] = set()
+    errs: List[str] = []
+
+    def dfs(node: str, path: List[str]) -> None:
+        color[node] = GRAY
+        path.append(node)
+        for dep in adj.get(node, []):
+            if dep not in color:
+                continue
+            if color[dep] == GRAY:
+                cycle_start = path.index(dep)
+                cycle = path[cycle_start:]
+                cycle_key = tuple(sorted(cycle))
+                if cycle_key not in reported:
+                    reported.add(cycle_key)
+                    errs.append(
+                        f"dependency cycle: {' -> '.join(cycle)} -> {dep}"
+                    )
+            elif color[dep] == WHITE:
+                dfs(dep, path)
+        path.pop()
+        color[node] = BLACK
+
+    for tid in adj:
+        if color[tid] == WHITE:
+            dfs(tid, [])
+
+    return errs
+
 
 def validate_claimable_deps(tickets: List[Ticket]) -> List[str]:
     """
@@ -1825,6 +1869,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
     errors += validate_wip_limit(tickets, args.max_claimed_per_owner)
     errors += validate_depends(tickets, archived_ids)
+    errors += validate_dependency_cycles(tickets)
     if args.enforce_done_deps:
         errors += validate_claimable_deps(tickets)
 
