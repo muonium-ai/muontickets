@@ -113,6 +113,8 @@ enum Commands {
     FailTask {
         id: String,
         #[arg(long)]
+        owner: String,
+        #[arg(long)]
         error: String,
         #[arg(long = "retry-limit")]
         retry_limit: Option<i64>,
@@ -1968,7 +1970,7 @@ fn cmd_allocate_task(
     Ok(0)
 }
 
-fn cmd_fail_task(id: String, error: String, retry_limit: Option<i64>, force: bool) -> Result<i32> {
+fn cmd_fail_task(id: String, owner: String, error: String, retry_limit: Option<i64>, force: bool) -> Result<i32> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let repo = find_repo_root(&cwd);
     let path = find_ticket_by_id(&repo, &id)?;
@@ -1981,6 +1983,19 @@ fn cmd_fail_task(id: String, error: String, retry_limit: Option<i64>, force: boo
             "Refusing to fail task: status is {:?} (expected 'claimed'). Use --force to override.",
             status
         ));
+    }
+
+    if !force {
+        let current_owner = map_get_string(&meta, "allocated_to")
+            .or_else(|| map_get_string(&meta, "owner"));
+        if let Some(ref co) = current_owner {
+            if co != &owner {
+                return Err(anyhow!(
+                    "Refusing to fail task: caller {:?} does not match current owner/allocated_to {:?}. Use --force to override.",
+                    owner, co
+                ));
+            }
+        }
     }
 
     let next_retry_count = map_get_i64(&meta, "retry_count").unwrap_or(0) + 1;
@@ -3844,10 +3859,11 @@ fn run() -> Result<i32> {
         ),
         Commands::FailTask {
             id,
+            owner,
             error,
             retry_limit,
             force,
-        } => cmd_fail_task(id, error, retry_limit, force),
+        } => cmd_fail_task(id, owner, error, retry_limit, force),
         Commands::Claim {
             id,
             owner,

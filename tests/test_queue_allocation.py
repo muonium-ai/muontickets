@@ -74,7 +74,7 @@ class QueueAllocationTests(unittest.TestCase):
                 self.assertEqual(alloc.returncode, 0)
                 self.assertIn(tid, alloc.stdout)
 
-                failed = self.run_cli(workdir, "fail-task", tid, "--error", "transient failure")
+                failed = self.run_cli(workdir, "fail-task", tid, "--owner", "agent-a", "--error", "transient failure")
                 self.assertEqual(failed.returncode, 0)
                 self.assertIn("re-queued", failed.stdout)
                 self.assertIn(f"{attempt}/3", failed.stdout)
@@ -87,7 +87,7 @@ class QueueAllocationTests(unittest.TestCase):
             self.assertEqual(alloc.returncode, 0)
             self.assertIn(tid, alloc.stdout)
 
-            exhausted = self.run_cli(workdir, "fail-task", tid, "--error", "persistent failure")
+            exhausted = self.run_cli(workdir, "fail-task", tid, "--owner", "agent-a", "--error", "persistent failure")
             self.assertEqual(exhausted.returncode, 0)
             self.assertIn("moved to tickets/errors", exhausted.stdout)
 
