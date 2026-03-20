@@ -293,7 +293,7 @@ fn effort_weight(effort: &str) -> i32 {
 }
 
 fn today_str() -> String {
-    Utc::now().date_naive().format("%Y-%m-%d").to_string()
+    Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 fn id_regex() -> Regex {
