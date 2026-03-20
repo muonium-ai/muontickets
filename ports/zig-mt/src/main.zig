@@ -295,7 +295,7 @@ fn countActiveTicketFiles(allocator: std.mem.Allocator, repo: []const u8) !u32 {
 }
 
 fn writeTicketFile(allocator: std.mem.Allocator, path: []const u8, id: []const u8, title: []const u8, status: []const u8, priority: []const u8, ticket_type: []const u8, effort: []const u8, labels: []const u8, body: []const u8) !void {
-    const today = try todayIsoDate(allocator);
+    const today = try nowUtcIsoTimestamp(allocator);
     defer allocator.free(today);
     const text = try std.fmt.allocPrint(
         allocator,
@@ -616,7 +616,7 @@ fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     defer allocator.free(with_owner);
     const with_branch = try setMetaField(allocator, with_owner, "branch", branch);
     defer allocator.free(with_branch);
-    const today = try todayIsoDate(allocator);
+    const today = try nowUtcIsoTimestamp(allocator);
     defer allocator.free(today);
     const with_created = try setMetaField(allocator, with_branch, "created", today);
     defer allocator.free(with_created);
@@ -2228,7 +2228,7 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
     );
     defer allocator.free(lease_expires_at);
 
-    const today = try todayIsoDate(allocator);
+    const today = try nowUtcIsoTimestamp(allocator);
     defer allocator.free(today);
 
     const next1 = try setMetaField(allocator, chosen.content, "status", "claimed");
@@ -2313,7 +2313,7 @@ fn cmdFailTask(allocator: std.mem.Allocator, id: []const u8, err_text: []const u
     defer allocator.free(retry_limit_text);
     const now_iso = try nowUtcIsoTimestamp(allocator);
     defer allocator.free(now_iso);
-    const today = try todayIsoDate(allocator);
+    const today = try nowUtcIsoTimestamp(allocator);
     defer allocator.free(today);
 
     const next1 = try setMetaField(allocator, content, "retry_count", retry_count_text);
@@ -4663,7 +4663,7 @@ fn cmdMaintainCreate(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
         const title = try std.fmt.allocPrint(allocator, "[MAINT-{d:0>3}] {s}", .{ @as(u32, @intCast(rule.id)), rule.title });
         defer allocator.free(title);
 
-        const today = try todayIsoDate(allocator);
+        const today = try nowUtcIsoTimestamp(allocator);
         defer allocator.free(today);
 
         const owner_str: []const u8 = owner orelse "null";
