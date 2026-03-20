@@ -1414,6 +1414,9 @@ Write a single-sentence goal.
 ## Notes
 """
     path = os.path.join(tdir, f"{tid}.md")
+    if os.path.exists(path):
+        eprint(f"Refusing to create ticket: {path} already exists")
+        return 2
     write_ticket(Ticket(path=path, meta=meta, body=body))
     print(path)
     return 0
@@ -1780,6 +1783,26 @@ def validate_claimable_deps(tickets: List[Ticket]) -> List[str]:
                 errs.append(f"{meta.get('id')} status {st} but deps not done: {missing}")
     return errs
 
+def validate_unique_ids(repo: str) -> List[str]:
+    """Detect duplicate frontmatter IDs across all buckets."""
+    seen: Dict[str, List[str]] = {}  # id -> list of relative paths
+    for p in all_ticket_paths(repo):
+        try:
+            t = read_ticket(p)
+        except Exception:
+            continue
+        meta = normalize_meta(t.meta)
+        tid = meta.get("id")
+        if not isinstance(tid, str):
+            continue
+        rel = os.path.relpath(p, tickets_dir(repo))
+        seen.setdefault(tid, []).append(rel)
+    errs: List[str] = []
+    for tid, paths in sorted(seen.items()):
+        if len(paths) > 1:
+            errs.append(f"duplicate id {tid} found in: {', '.join(sorted(paths))}")
+    return errs
+
 def cmd_validate(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     tickets = load_all_tickets(repo)
@@ -1823,6 +1846,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
         if eff not in DEFAULT_EFFORTS:
             errors.append(f"{os.path.basename(t.path)}: effort must be one of {DEFAULT_EFFORTS}, got {eff!r}")
 
+    errors += validate_unique_ids(repo)
     errors += validate_wip_limit(tickets, args.max_claimed_per_owner)
     errors += validate_depends(tickets, archived_ids)
     if args.enforce_done_deps:
