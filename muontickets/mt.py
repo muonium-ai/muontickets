@@ -200,7 +200,7 @@ def dump_yaml(data: Dict[str, Any]) -> str:
 def find_repo_root(start: Optional[str] = None) -> str:
     cur = os.path.abspath(start or os.getcwd())
     while True:
-        if os.path.isdir(os.path.join(cur, "tickets")):
+        if os.path.isdir(os.path.join(cur, "tickets")) or os.path.isfile(os.path.join(cur, "VERSION")):
             return cur
         parent = os.path.dirname(cur)
         if parent == cur:
