@@ -70,7 +70,7 @@ Schema-driven required fields (from current `schema.json`):
 
 Key optional/defaulted fields:
 
-- `effort` (`xs|s|m|l`)
+- `effort` (`xs|s|m|l|xl|xxl`)
 - `tags` (string list)
 - `score` (number)
 

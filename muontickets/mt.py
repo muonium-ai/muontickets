@@ -65,7 +65,7 @@ FRONTMATTER_BOUNDARY = "---"
 DEFAULT_STATES = ["ready", "claimed", "blocked", "needs_review", "done"]
 DEFAULT_PRIORITIES = ["p0", "p1", "p2"]
 DEFAULT_TYPES = ["spec", "code", "tests", "docs", "refactor", "chore"]
-DEFAULT_EFFORTS = ["xs", "s", "m", "l"]
+DEFAULT_EFFORTS = ["xs", "s", "m", "l", "xl", "xxl"]
 TICKET_TEMPLATE_NAME = "ticket.template"
 
 SKILL_PICK_PROFILES: Dict[str, Dict[str, List[str]]] = {
@@ -91,7 +91,7 @@ ALLOWED_TRANSITIONS = {
 }
 
 PRIORITY_WEIGHT = {"p0": 300, "p1": 200, "p2": 100}
-EFFORT_WEIGHT = {"xs": 40, "s": 30, "m": 20, "l": 10}
+EFFORT_WEIGHT = {"xs": 40, "s": 30, "m": 20, "l": 10, "xl": 5, "xxl": 2}
 UTC = getattr(_dt, "UTC", _dt.timezone.utc)
 
 
@@ -1299,7 +1299,7 @@ def compute_score(meta: Dict[str, Any], id_to_meta: Dict[str, Dict[str, Any]]) -
     Higher score = more desirable to pick next.
     Factors:
     - priority (p0 highest)
-    - smaller effort preferred (xs > s > m > l)
+    - smaller effort preferred (xs > s > m > l > xl > xxl)
     - fewer dependencies preferred
     - older tickets preferred (created timestamp)
     """

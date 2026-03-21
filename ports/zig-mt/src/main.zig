@@ -83,7 +83,7 @@ fn printHelp() void {
 }
 
 const statuses = [_][]const u8{ "ready", "claimed", "blocked", "needs_review", "done" };
-const efforts = [_][]const u8{ "xs", "s", "m", "l" };
+const efforts = [_][]const u8{ "xs", "s", "m", "l", "xl", "xxl" };
 const priorities = [_][]const u8{ "p0", "p1", "p2" };
 const ticket_types = [_][]const u8{ "spec", "code", "tests", "docs", "refactor", "chore" };
 
@@ -373,7 +373,7 @@ fn cmdInit(allocator: std.mem.Allocator) !void {
 
 fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     if (cmd_args.len < 1) {
-        std.debug.print("usage: mt-zig new <title> [--priority <p0|p1|p2>] [--type <spec|code|tests|docs|refactor|chore>] [--effort <xs|s|m|l>] [--label <label>]... [--tag <tag>]... [--depends-on <T-xxxxxx>]... [--goal <text>]\n", .{});
+        std.debug.print("usage: mt-zig new <title> [--priority <p0|p1|p2>] [--type <spec|code|tests|docs|refactor|chore>] [--effort <xs|s|m|l|xl|xxl>] [--label <label>]... [--tag <tag>]... [--depends-on <T-xxxxxx>]... [--goal <text>]\n", .{});
         std.process.exit(2);
     }
 
@@ -928,6 +928,8 @@ fn effortWeight(effort: []const u8) i64 {
     if (std.mem.eql(u8, effort, "s")) return 30;
     if (std.mem.eql(u8, effort, "m")) return 20;
     if (std.mem.eql(u8, effort, "l")) return 10;
+    if (std.mem.eql(u8, effort, "xl")) return 5;
+    if (std.mem.eql(u8, effort, "xxl")) return 2;
     return 0;
 }
 
@@ -1566,7 +1568,7 @@ fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             try errors.append(msg);
         }
         if (!effortAllowed(effort)) {
-            const msg = try std.fmt.allocPrint(allocator, "{s}: effort must be one of xs,s,m,l, got {s}", .{ entry.name, effort });
+            const msg = try std.fmt.allocPrint(allocator, "{s}: effort must be one of xs,s,m,l,xl,xxl, got {s}", .{ entry.name, effort });
             try errors.append(msg);
         }
         if (std.mem.eql(u8, status, "claimed") and std.mem.eql(u8, owner, "null")) {

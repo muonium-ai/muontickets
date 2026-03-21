@@ -243,7 +243,7 @@ enum MaintainCmd {
 const DEFAULT_STATES: &[&str] = &["ready", "claimed", "blocked", "needs_review", "done"];
 const DEFAULT_PRIORITIES: &[&str] = &["p0", "p1", "p2"];
 const DEFAULT_TYPES: &[&str] = &["spec", "code", "tests", "docs", "refactor", "chore"];
-const DEFAULT_EFFORTS: &[&str] = &["xs", "s", "m", "l"];
+const DEFAULT_EFFORTS: &[&str] = &["xs", "s", "m", "l", "xl", "xxl"];
 
 fn root_version_components() -> Result<(u64, u64, String)> {
     let raw = option_env!("MT_ROOT_VERSION").ok_or_else(|| anyhow!("missing MT_ROOT_VERSION build metadata"))?;
@@ -288,6 +288,8 @@ fn effort_weight(effort: &str) -> i32 {
         "s" => 30,
         "m" => 20,
         "l" => 10,
+        "xl" => 5,
+        "xxl" => 2,
         _ => 0,
     }
 }
