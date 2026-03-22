@@ -1390,7 +1390,7 @@ static int cmd_new_native(int argc, char **argv) {
     int rc;
     const char *const priorities[] = {"p0", "p1", "p2"};
     const char *const types[] = {"spec", "code", "tests", "docs", "refactor", "chore"};
-    const char *const efforts[] = {"xs", "s", "m", "l"};
+    const char *const efforts[] = {"xs", "s", "m", "l", "xl", "xxl"};
 
     rc = parse_new_args(argc, argv, &na);
     if (rc == -1) {
