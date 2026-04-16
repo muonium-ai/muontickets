@@ -323,7 +323,7 @@ fn tickets_dir(repo_root: &Path) -> PathBuf {
 }
 
 fn archive_dir(repo_root: &Path) -> PathBuf {
-    repo_root.join("tickets").join("archive")
+    repo_root.join("tickets").join("archived")
 }
 
 fn errors_dir(repo_root: &Path) -> PathBuf {
@@ -2208,8 +2208,8 @@ fn cmd_stats() -> Result<i32> {
 
 fn ticket_bucket(repo: &Path, path: &Path) -> String {
     let rel = path.strip_prefix(repo).unwrap_or(path).display().to_string();
-    if rel.starts_with("tickets/archive/") {
-        "archive".to_string()
+    if rel.starts_with("tickets/archived/") {
+        "archived".to_string()
     } else if rel.starts_with("tickets/errors/") {
         "errors".to_string()
     } else if rel.starts_with("tickets/backlogs/") {
@@ -2248,7 +2248,7 @@ fn cmd_report(db: String, summary: bool, search: String, limit: i32) -> Result<i
         };
         normalize_meta(&mut meta);
         let bucket = ticket_bucket(&repo, &path);
-        let is_archived = if bucket == "archive" { 1 } else { 0 };
+        let is_archived = if bucket == "archived" { 1 } else { 0 };
 
         rows.push((
             map_get_string(&meta, "id"),

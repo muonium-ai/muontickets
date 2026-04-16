@@ -185,12 +185,12 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000001
 ## Archive, Backlogs, and Ticket IDs
 
 - Active tickets live in `tickets/`.
-- Completed tickets can be moved to `tickets/archive/` using `mt archive`.
+- Completed tickets can be moved to `tickets/archived/` using `mt archive`.
 - `mt archive` refuses to move a ticket if active tickets still reference it in `depends_on` (unless `--force`).
 - `mt validate` reports `depends_on archived ticket ...` when an active ticket depends on an archived ticket.
 - Future/planned work can live in `tickets/backlogs/`.
 - Ticket numbering is tracked in `tickets/last_ticket_id`.
-- If `tickets/last_ticket_id` is missing, `mt` automatically rebuilds the next number by scanning ticket IDs across `tickets/`, `tickets/archive/`, and `tickets/backlogs/`.
+- If `tickets/last_ticket_id` is missing, `mt` automatically rebuilds the next number by scanning ticket IDs across `tickets/`, `tickets/archived/`, and `tickets/backlogs/`.
 
 ## Ticket Template (`tickets/ticket.template`)
 
@@ -404,7 +404,7 @@ Run with search:
 uv run python3 tickets/mt/muontickets/muontickets/mt.py report --search auth --limit 20
 ```
 
-By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data from `tickets/`, `tickets/archive/`, `tickets/errors/`, and `tickets/backlogs/`.
+By default this creates `tickets/tickets_report.sqlite3` and indexes ticket data from `tickets/`, `tickets/archived/`, `tickets/errors/`, and `tickets/backlogs/`.
 
 ## Binary Releases (Preview)
 

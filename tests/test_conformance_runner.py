@@ -282,7 +282,7 @@ class ConformanceRunnerTests(unittest.TestCase):
             self.assertTrue((root / "tickets" / "T-000001.md").exists())
             self.assertIn("T-000001", (root / "tickets" / "last_ticket_id").read_text(encoding="utf-8"))
 
-            archive = root / "tickets" / "archive"
+            archive = root / "tickets" / "archived"
             archive.mkdir(parents=True, exist_ok=True)
             (archive / "T-000123.md").write_text("---\nid: T-000123\n---\n", encoding="utf-8")
 
@@ -457,8 +457,8 @@ class ConformanceRunnerTests(unittest.TestCase):
 
             archived = subprocess.run([c_bin, "archive", "T-000002", "--force"], cwd=str(root), env=env, capture_output=True, text=True)
             self.assertEqual(archived.returncode, 0, msg=f"stdout:\n{archived.stdout}\nstderr:\n{archived.stderr}")
-            self.assertIn("archived T-000002 -> tickets/archive/T-000002.md", archived.stdout + archived.stderr)
-            self.assertTrue((root / "tickets" / "archive" / "T-000002.md").exists())
+            self.assertIn("archived T-000002 -> tickets/archived/T-000002.md", archived.stdout + archived.stderr)
+            self.assertTrue((root / "tickets" / "archived" / "T-000002.md").exists())
 
     def test_zig_new_uses_template_defaults(self) -> None:
         zig_bin = self.get_zig_bin()
