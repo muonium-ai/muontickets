@@ -111,11 +111,11 @@ After submodule installation:
           Makefile.snippet
       ticket.template
       T-000123.md
-      archive/
+      archived/
       backlog/
 
 Active tickets live in `tickets/`.
-Completed tickets can move to `tickets/archive/`.
+Completed tickets can move to `tickets/archived/`.
 Future work can be staged in `tickets/backlog/`.
 Retry-exhausted tickets can move to `tickets/errors/` for manual triage.
 

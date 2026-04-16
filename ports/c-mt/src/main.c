@@ -428,7 +428,7 @@ static int scan_ticket_max_all_buckets(const char *tickets_dir) {
         max_n = n;
     }
 
-    join_path(archive_p, sizeof(archive_p), tickets_dir, "archive");
+    join_path(archive_p, sizeof(archive_p), tickets_dir, "archived");
     n = scan_ticket_dir_max(archive_p);
     if (n > max_n) {
         max_n = n;
@@ -939,7 +939,7 @@ static int cmd_archive_force_native(int argc, char **argv) {
     }
 
     join_path(tickets_path, sizeof(tickets_path), repo_root, "tickets");
-    join_path(archive_path, sizeof(archive_path), tickets_path, "archive");
+    join_path(archive_path, sizeof(archive_path), tickets_path, "archived");
     snprintf(src, sizeof(src), "%s%c%s.md", tickets_path, PATH_SEP, argv[2]);
     snprintf(dst, sizeof(dst), "%s%c%s.md", archive_path, PATH_SEP, argv[2]);
 
@@ -1002,7 +1002,7 @@ static int cmd_archive_force_native(int argc, char **argv) {
         fprintf(stderr, "failed to archive ticket: %s\n", strerror(errno));
         return 1;
     }
-    printf("archived %s -> tickets/archive/%s.md\n", argv[2], argv[2]);
+    printf("archived %s -> tickets/archived/%s.md\n", argv[2], argv[2]);
     return 0;
 }
 

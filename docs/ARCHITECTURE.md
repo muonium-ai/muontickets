@@ -33,7 +33,7 @@ muontickets/
 │   ├── incidents.log        # Append-only event log
 │   ├── last_ticket_id       # Sequential ID counter
 │   ├── ticket.template      # Project-specific ticket defaults
-│   ├── archive/             # Completed tickets (moved here after done)
+│   ├── archived/            # Completed tickets (moved here after done)
 │   ├── backlogs/            # Planned/future work not yet active
 │   └── errors/              # Dead-letter queue for exhausted retries
 ├── mt.py                    # Root CLI entry point (delegates to muontickets/mt.py)
@@ -109,7 +109,7 @@ The CLI entry point is `mt.py` at the repo root, which delegates to `muontickets
 | `comment` | Append progress log entry |
 | `set-status` | Change ticket status (with transition validation) |
 | `done` | Mark ticket done (terminal state) |
-| `archive` | Move done ticket to `tickets/archive/` |
+| `archive` | Move done ticket to `tickets/archived/` |
 
 ### Queue Allocation (Lease-Based)
 | Command | Purpose |
@@ -148,7 +148,7 @@ mt pick --owner agent-1         # status=claimed, owner=agent-1
 mt comment T-000001 "Done X"    # progress log appended to ticket body
 mt set-status T-000001 needs_review
 mt done T-000001                # status=done (terminal)
-mt archive T-000001             # moved to tickets/archive/
+mt archive T-000001             # moved to tickets/archived/
 ```
 
 **Dependency enforcement:** `pick` and `claim` refuse to claim a ticket if any ticket in `depends_on` is not yet `done`, unless `--ignore-deps` is passed.

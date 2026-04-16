@@ -179,7 +179,7 @@ Issues 1 through 5 below are TLA-backed workflow findings. Issues 6 through 9 ar
 - Repro:
   1. `mt init`
   2. copy `tickets/T-000001.md` to `tickets/T-000002.md` without changing frontmatter `id`
-  3. copy `tickets/T-000001.md` into `tickets/archive/T-000001.md`
+  3. copy `tickets/T-000001.md` into `tickets/archived/T-000001.md`
   4. run `mt validate`
   5. run `mt export --format json`
   6. run `mt report --search T-000001`

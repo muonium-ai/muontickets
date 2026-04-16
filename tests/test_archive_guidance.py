@@ -64,6 +64,29 @@ class ArchiveGuidanceTests(unittest.TestCase):
             self.assertIn("No completed tickets are currently archive-safe.", blocked.stderr)
             self.assertIn("Hint: run mt graph", blocked.stderr)
 
+    def test_archive_moves_done_ticket_into_archived_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workdir = Path(td)
+
+            subprocess.run(["git", "init", "-q"], cwd=str(workdir), check=True)
+
+            self.assertEqual(self.run_cli(workdir, "init").returncode, 0)
+            self.assertEqual(self.run_cli(workdir, "new", "Happy Path").returncode, 0)
+            self.assertEqual(self.run_cli(workdir, "claim", "T-000002", "--owner", "tester").returncode, 0)
+            self.assertEqual(self.run_cli(workdir, "set-status", "T-000002", "needs_review").returncode, 0)
+            self.assertEqual(self.run_cli(workdir, "done", "T-000002").returncode, 0)
+
+            src = workdir / "tickets" / "T-000002.md"
+            dst = workdir / "tickets" / "archived" / "T-000002.md"
+            self.assertTrue(src.exists())
+            self.assertFalse(dst.exists())
+
+            archived = self.run_cli(workdir, "archive", "T-000002")
+            self.assertEqual(archived.returncode, 0, msg=f"stdout:\n{archived.stdout}\nstderr:\n{archived.stderr}")
+            self.assertIn("archived T-000002 -> tickets/archived/T-000002.md", archived.stdout)
+            self.assertFalse(src.exists())
+            self.assertTrue(dst.exists())
+
     def test_archive_force_behavior_regression(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             workdir = Path(td)

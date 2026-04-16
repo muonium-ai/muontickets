@@ -52,7 +52,7 @@ The port MUST preserve file-backed canonical state. Optional caches/reports (lik
 ### 6.1 Directory model
 
 - Active tickets: `tickets/T-000123.md`
-- Archived tickets: `tickets/archive/T-000123.md`
+- Archived tickets: `tickets/archived/T-000123.md`
 - Planned backlog tickets: `tickets/backlogs/T-000123.md`
 - Template: `tickets/ticket.template`
 - ID state: `tickets/last_ticket_id`
@@ -128,7 +128,7 @@ Ported implementation MUST support these commands and semantics.
 ### 7.4 Archival and dependency safety
 
 - `mt archive T-000123`
-  - Moves completed ticket into `tickets/archive/`.
+  - Moves completed ticket into `tickets/archived/`.
   - Refuses if active tickets depend on it, unless `--force`.
   - Emits warnings about invalid board states when force-archiving with active dependents.
 
@@ -158,7 +158,7 @@ The port MUST read/write existing ticket files and frontmatter with no migration
 
 ### FR-3: Deterministic IDs
 
-The port MUST preserve ID allocation semantics (`last_ticket_id` with full scan fallback across active/archive/backlog trees).
+The port MUST preserve ID allocation semantics (`last_ticket_id` with full scan fallback across active/archived/backlog trees).
 
 ### FR-4: Validation fidelity
 

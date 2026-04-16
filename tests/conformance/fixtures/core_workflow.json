@@ -51,7 +51,7 @@
       "name": "force archive with warning",
       "args": ["archive", "T-000002", "--force"],
       "expect_exit": 0,
-      "expect_stdout_contains": ["archived T-000002 -> tickets/archive/T-000002.md"],
+      "expect_stdout_contains": ["archived T-000002 -> tickets/archived/T-000002.md"],
       "expect_stderr_contains": ["force-archiving with active dependents: T-000003"]
     },
     {

@@ -242,7 +242,7 @@ fn writeLastTicketNumber(allocator: std.mem.Allocator, repo: []const u8, number:
 }
 
 fn scanMaxTicketNumber(allocator: std.mem.Allocator, repo: []const u8) !u32 {
-    const roots = [_][]const u8{ "tickets", "tickets/archive" };
+    const roots = [_][]const u8{ "tickets", "tickets/archived" };
     var max_num: u32 = 0;
 
     for (roots) |root_rel| {
@@ -849,7 +849,7 @@ fn ticketPath(allocator: std.mem.Allocator, repo: []const u8, id: []const u8) ![
 fn archivedTicketPath(allocator: std.mem.Allocator, repo: []const u8, id: []const u8) ![]u8 {
     const file_name = try std.fmt.allocPrint(allocator, "{s}.md", .{id});
     defer allocator.free(file_name);
-    return std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets", "archive", file_name });
+    return std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets", "archived", file_name });
 }
 
 fn errorTicketPath(allocator: std.mem.Allocator, repo: []const u8, id: []const u8) ![]u8 {
@@ -1377,7 +1377,7 @@ fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
         std.debug.print(". This can create invalid board state where active tickets depends_on archived tickets.\n", .{});
     }
 
-    const archive_dir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets", "archive" });
+    const archive_dir = try std.fs.path.join(allocator, &[_][]const u8{ repo, "tickets", "archived" });
     defer allocator.free(archive_dir);
     if (!dirExists(archive_dir)) try std.fs.cwd().makePath(archive_dir);
     if (fileExists(dst)) {
@@ -1385,7 +1385,7 @@ fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
         std.process.exit(2);
     }
     try std.fs.cwd().rename(src, dst);
-    const rel = try std.fmt.allocPrint(allocator, "tickets/archive/{s}.md", .{id});
+    const rel = try std.fmt.allocPrint(allocator, "tickets/archived/{s}.md", .{id});
     defer allocator.free(rel);
     try printStdout(allocator, "archived {s} -> {s}\n", .{ id, rel });
 }
@@ -2707,7 +2707,7 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         seen_paths.deinit();
     }
 
-    const roots = [_][]const u8{ "tickets", "tickets/archive", "tickets/errors", "tickets/backlogs" };
+    const roots = [_][]const u8{ "tickets", "tickets/archived", "tickets/errors", "tickets/backlogs" };
     for (roots) |root_rel| {
         const root = try std.fs.path.join(allocator, &[_][]const u8{ repo, root_rel });
         defer allocator.free(root);
@@ -2746,8 +2746,8 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
                 .depends_on = try allocator.dupe(u8, parseMetaField(content, "depends_on") orelse "[]"),
                 .labels = try allocator.dupe(u8, parseMetaField(content, "labels") orelse "[]"),
                 .tags = try allocator.dupe(u8, parseMetaField(content, "tags") orelse "[]"),
-                .bucket = try allocator.dupe(u8, if (std.mem.eql(u8, root_rel, "tickets/archive")) "archive" else if (std.mem.eql(u8, root_rel, "tickets/errors")) "errors" else if (std.mem.eql(u8, root_rel, "tickets/backlogs")) "backlogs" else "tickets"),
-                .is_archived = if (std.mem.eql(u8, root_rel, "tickets/archive")) 1 else 0,
+                .bucket = try allocator.dupe(u8, if (std.mem.eql(u8, root_rel, "tickets/archived")) "archived" else if (std.mem.eql(u8, root_rel, "tickets/errors")) "errors" else if (std.mem.eql(u8, root_rel, "tickets/backlogs")) "backlogs" else "tickets"),
+                .is_archived = if (std.mem.eql(u8, root_rel, "tickets/archived")) 1 else 0,
                 .path = try allocator.dupe(u8, rel),
                 .body = try allocator.dupe(u8, content),
             });

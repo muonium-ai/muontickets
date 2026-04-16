@@ -211,7 +211,7 @@ def tickets_dir(repo_root: str) -> str:
     return os.path.join(repo_root, "tickets")
 
 def archive_dir(repo_root: str) -> str:
-    return os.path.join(repo_root, "tickets", "archive")
+    return os.path.join(repo_root, "tickets", "archived")
 
 def errors_dir(repo_root: str) -> str:
     return os.path.join(repo_root, "tickets", "errors")
@@ -2384,8 +2384,8 @@ def cmd_fail_task(args: argparse.Namespace) -> int:
 
 def ticket_bucket(repo: str, path: str) -> str:
     rel = os.path.relpath(path, repo)
-    if rel.startswith("tickets/archive/"):
-        return "archive"
+    if rel.startswith("tickets/archived/"):
+        return "archived"
     if rel.startswith("tickets/errors/"):
         return "errors"
     if rel.startswith("tickets/backlogs/"):
@@ -2427,7 +2427,7 @@ def cmd_report(args: argparse.Namespace) -> int:
                 json.dumps(meta.get("depends_on") or []),
                 rel,
                 ticket_bucket(repo, path),
-                1 if ticket_bucket(repo, path) == "archive" else 0,
+                1 if ticket_bucket(repo, path) == "archived" else 0,
                 t.body,
             )
         )
@@ -3782,7 +3782,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_done.add_argument("--force", action="store_true")
     p_done.set_defaults(func=cmd_done)
 
-    p_archive = sub.add_parser("archive", help="Move a ticket from tickets/ to archive/ (expects done).")
+    p_archive = sub.add_parser("archive", help="Move a ticket from tickets/ to archived/ (expects done).")
     p_archive.add_argument("id")
     p_archive.add_argument("--force", action="store_true", help="Archive even if status is not done")
     p_archive.set_defaults(func=cmd_archive)
@@ -3804,7 +3804,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_val.add_argument("--enforce-done-deps", action="store_true", help="Enforce that claimed/needs_review/done tickets have deps done")
     p_val.set_defaults(func=cmd_validate)
 
-    p_report = sub.add_parser("report", help="Build SQLite report DB from tickets/archive/backlogs and print summaries.")
+    p_report = sub.add_parser("report", help="Build SQLite report DB from tickets/archived/backlogs and print summaries.")
     p_report.add_argument("--db", default="tickets/tickets_report.sqlite3", help="SQLite output path (default: tickets/tickets_report.sqlite3)")
     p_report.add_argument("--summary", action="store_true", default=True, help="Print summary tables")
     p_report.add_argument("--search", default="", help="Search string for id/title/body/labels/tags")
