@@ -44,7 +44,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as _dt
-import fcntl
 import glob as _glob
 import json
 import os
@@ -56,6 +55,25 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+try:
+    import fcntl  # type: ignore
+except ModuleNotFoundError:
+    import msvcrt
+
+    class _WindowsFcntl:
+        LOCK_EX = 1
+        LOCK_UN = 2
+
+        @staticmethod
+        def flock(fd: int, operation: int) -> None:
+            os.lseek(fd, 0, os.SEEK_SET)
+            if operation == _WindowsFcntl.LOCK_UN:
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+
+    fcntl = _WindowsFcntl()
 
 ID_RE = re.compile(r"^T-\d{6}$")
 TICKET_FILE_RE = re.compile(r"^(T-\d{6})\.md$")
