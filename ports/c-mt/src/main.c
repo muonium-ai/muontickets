@@ -88,7 +88,7 @@ static const char *DEFAULT_TEMPLATE_TEXT =
     "\n"
     "## Queue Lifecycle (if allocated)\n"
     "- [ ] Add progress with `mt comment <id> \"...\"`\n"
-    "- [ ] If blocked/failing, run `mt fail-task <id> --error \"...\"`\n"
+    "- [ ] If blocked/failing, run `mt fail-task <id> --owner <owner> --error \"...\"`\n"
     "- [ ] On completion, move to `needs_review` then `done`\n";
 
 static const char *EXAMPLE_BODY =

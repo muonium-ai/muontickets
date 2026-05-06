@@ -18,7 +18,7 @@ Commands (high level):
   mt show T-000123
   mt pick --owner agent-1 [--label wasm]     # choose best ready ticket, claim it
     mt allocate-task --owner agent-1            # queue allocator, returns one ticket id
-    mt fail-task T-000123 --error "..."        # record failed attempt and retry/escalate
+    mt fail-task T-000123 --owner agent-1 --error "..."  # record failed attempt and retry/escalate
   mt claim T-000123 --owner agent-1
   mt comment T-000123 "…"
   mt set-status T-000123 needs_review
@@ -112,6 +112,11 @@ def now_compact() -> str:
 
 def eprint(*args: Any) -> None:
     print(*args, file=sys.stderr)
+
+
+class CliError(Exception):
+    """User-facing CLI error that should not produce a traceback."""
+
 
 def load_yaml(text: str) -> Dict[str, Any]:
     """
@@ -1227,7 +1232,7 @@ Write a single-sentence goal.
 
 ## Queue Lifecycle (if allocated)
 - [ ] Add progress with `mt comment <id> "..."`
-- [ ] If blocked/failing, run `mt fail-task <id> --error "..."`
+- [ ] If blocked/failing, run `mt fail-task <id> --owner <owner> --error "..."`
 - [ ] On completion, move to `needs_review` then `done`
 """
 
@@ -1272,14 +1277,14 @@ def load_all_tickets(repo: str) -> List[Ticket]:
 
 def find_ticket_by_id(repo: str, tid: str) -> Ticket:
     if not ID_RE.match(tid):
-        raise ValueError(f"Invalid ticket id: {tid}")
+        raise CliError(f"Invalid ticket id: {tid} (expected format T-000000)")
     path = os.path.join(tickets_dir(repo), f"{tid}.md")
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Ticket not found: {path}")
+        raise CliError(f"Ticket not found: {tid}")
     t = read_ticket(path)
     meta_id = normalize_meta(t.meta).get("id")
     if meta_id and meta_id != tid:
-        raise ValueError(
+        raise CliError(
             f"Filename/frontmatter ID mismatch: file={tid}, id={meta_id}")
     return t
 
@@ -3888,7 +3893,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(args_list)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except CliError as ex:
+        eprint(str(ex))
+        return 2
 
 if __name__ == "__main__":
     raise SystemExit(main())

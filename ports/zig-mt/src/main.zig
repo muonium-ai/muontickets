@@ -130,7 +130,7 @@ const default_template =
     \\
     \\## Queue Lifecycle (if allocated)
     \\- [ ] Add progress with `mt comment <id> "..."`
-    \\- [ ] If blocked/failing, run `mt fail-task <id> --error "..."`
+    \\- [ ] If blocked/failing, run `mt fail-task <id> --owner <owner> --error "..."`
     \\- [ ] On completion, move to `needs_review` then `done`
     \\
 ;
@@ -4754,11 +4754,11 @@ pub fn main() !void {
         .allocate_task => try cmdAllocateTask(allocator, args[2..]),
         .fail_task => {
             if (args.len < 3) {
-                std.debug.print("usage: mt-zig fail-task <id> --error <text> [--retry-limit <n>] [--force]\n", .{});
+                std.debug.print("usage: mt-zig fail-task <id> --owner <owner> --error <text> [--retry-limit <n>] [--force]\n", .{});
                 std.process.exit(2);
             }
             const err_text = getOptValue(args[3..], "--error") orelse {
-                std.debug.print("fail-task requires --error <text>\n", .{});
+                std.debug.print("usage: mt-zig fail-task <id> --owner <owner> --error <text> [--retry-limit <n>] [--force]\n", .{});
                 std.process.exit(2);
             };
             try cmdFailTask(allocator, args[2], err_text, getOptValue(args[3..], "--retry-limit"), hasFlag(args[3..], "--force"));

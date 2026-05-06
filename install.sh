@@ -92,6 +92,7 @@ EOF
 install_precommit_hook() {
   local hook_src="${HOOK_REL_PATH}"
   local hook_dst=".git/hooks/pre-commit"
+  local hook_backup="${hook_dst}.muontickets-backup"
 
   if [[ ! -f "$hook_src" ]]; then
     warn "Hook not found at $hook_src (maybe submodule not initialized yet). Skipping."
@@ -99,6 +100,25 @@ install_precommit_hook() {
   fi
 
   mkdir -p ".git/hooks"
+  if [[ -f "$hook_dst" ]]; then
+    if cmp -s "$hook_dst" "$hook_src"; then
+      chmod +x "$hook_dst"
+      say "Pre-commit hook already installed."
+      return 0
+    fi
+
+    if [[ -e "$hook_backup" ]]; then
+      local suffix=1
+      while [[ -e "${hook_backup}.${suffix}" ]]; do
+        suffix=$((suffix + 1))
+      done
+      hook_backup="${hook_backup}.${suffix}"
+    fi
+
+    cp -p "$hook_dst" "$hook_backup"
+    say "Backed up existing pre-commit hook to $hook_backup."
+  fi
+
   cp "$hook_src" "$hook_dst"
   chmod +x "$hook_dst"
   say "Installed pre-commit hook."
@@ -239,6 +259,10 @@ Options:
   --ref <branch_or_tag>   Checkout this ref after submodule add
   --no-hooks              Do not install pre-commit hook
   --no-makefile           Do not patch Makefile
+
+Hook behavior:
+  Existing .git/hooks/pre-commit is backed up to .git/hooks/pre-commit.muontickets-backup before installing the MuonTickets hook.
+  Re-running with the same MuonTickets hook leaves the installed hook unchanged.
 
 Environment:
   MUONTICKETS_REPO, MUONTICKETS_REF, INSTALL_HOOKS, PATCH_MAKEFILE

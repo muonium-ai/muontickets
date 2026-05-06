@@ -106,10 +106,12 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py allocate-task --owner ag
 uv run python3 tickets/mt/muontickets/muontickets/mt.py allocate-task --owner agent-1 --priority p0 --type code --label backend
 
 # Report failed attempt (increments retry_count and re-queues)
-uv run python3 tickets/mt/muontickets/muontickets/mt.py fail-task T-000123 --error "build failed"
+uv run python3 tickets/mt/muontickets/muontickets/mt.py fail-task T-000123 --owner agent-1 --error "build failed"
 
 # On retry-limit exhaustion, ticket is moved to tickets/errors/ for manual resolution
 ```
+
+`fail-task` requires `--owner`; the value must match the ticket's current `owner` or `allocated_to` unless `--force` is used.
 
 ### Queue operator procedure
 
@@ -125,7 +127,7 @@ uv run python3 tickets/mt/muontickets/muontickets/mt.py set-status T-000123 need
 uv run python3 tickets/mt/muontickets/muontickets/mt.py done T-000123
 
 # 3b) Failure path (retry)
-uv run python3 tickets/mt/muontickets/muontickets/mt.py fail-task T-000123 --error "test failure"
+uv run python3 tickets/mt/muontickets/muontickets/mt.py fail-task T-000123 --owner agent-1 --error "test failure"
 
 # 4) Triage exhausted retries
 uv run python3 tickets/mt/muontickets/muontickets/mt.py ls --status blocked
@@ -424,7 +426,7 @@ Deduplication: tickets are tagged `maint-rule-{id}`. Repeated `create` runs skip
 - Temp artifact hygiene: use project-local `tmp/<agent-name>/` for scratch/build artifacts (avoid global `/tmp` assumptions in sandboxed environments).
 - Dependency handling: respect `depends_on`; do not start dependent work until prerequisites are done unless explicitly instructed.
 - Queue lease handling: allocated tickets have a lease window (default 5 minutes); expired leases may be reallocated and incident-logged.
-- Retry handling: use `fail-task` to record execution errors; when retry limit is reached, investigate `tickets/errors/` and `tickets/incidents.log`.
+- Retry handling: use `fail-task --owner <owner>` to record execution errors; `--owner` must match current `owner` or `allocated_to` unless `--force` is used; when retry limit is reached, investigate `tickets/errors/` and `tickets/incidents.log`.
 - Build hygiene: prefer Makefile targets where possible; use `make clean` as the standard cleanup step for project temp state.
 - Test order: run a basic smoke test first, then broader suites, to surface breakage early and reduce CI churn.
 - Validation cadence: run `mt validate` before commit/push and after ticket metadata updates.

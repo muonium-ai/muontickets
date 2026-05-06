@@ -86,19 +86,19 @@ Issues 1 through 5 below are TLA-backed workflow findings. Issues 6 through 9 ar
   3. expire the lease
   4. `mt allocate-task --owner agent-b`
   5. confirm MuonTickets reports stale-lease reallocation
-  6. `mt fail-task T-000001 --error "stale worker reported failure"`
+  6. `mt fail-task T-000001 --owner agent-a --error "stale worker reported failure"`
 - Actual result:
   - the stale lease is successfully reallocated to `agent-b`
   - a later `fail-task` still succeeds and pushes the ticket back to `ready`
   - `validate` still reports OK
 - Why this matters:
   - a stale worker can overwrite the result of a later, valid reallocation
-  - `fail-task` checks only `status == claimed`; it does not verify current owner or lease holder
+  - `fail-task` must verify that `--owner` matches the current `owner` or lease holder (`allocated_to`) unless `--force` is used
 - Port coverage:
   - reproduced in Python, Rust, and Zig
 - Recommended fix:
-  - require actor or owner identity on `fail-task`
-  - reject the mutation unless it matches the current `owner` or `allocated_to`
+  - require `--owner` identity on `fail-task`
+  - reject the mutation unless it matches the current `owner` or `allocated_to`, except for explicit `--force` overrides
 
 ### 4. Python writes lease timestamps it cannot parse itself
 
@@ -278,7 +278,7 @@ Issues 1 through 5 below are TLA-backed workflow findings. Issues 6 through 9 ar
 1. `set-status blocked -> claimed` without owner should fail.
 2. `set-status ... claimed` with unresolved dependencies should fail.
 3. claiming a third ticket for the same owner should fail when the configured max is 2.
-4. after stale-lease reallocation from `agent-a` to `agent-b`, `fail-task` for `agent-a` should fail.
+4. after stale-lease reallocation from `agent-a` to `agent-b`, `fail-task --owner agent-a` should fail unless `--force` is used.
 5. `allocate-task` must write a parseable `lease_expires_at`.
 6. `allocate-task -> needs_review -> done` must clear active lease fields.
 7. `validate` must fail if filename and frontmatter `id` differ.

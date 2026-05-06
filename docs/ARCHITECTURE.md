@@ -179,6 +179,8 @@ mt fail-task T-000001 --owner agent-1 --error "timeout"
 
 This increments `retry_count`. When `retry_count >= retry_limit`, the ticket is moved to `tickets/errors/` for manual triage.
 
+`fail-task` requires `--owner`; the value must match the ticket's current `owner` or `allocated_to` unless `--force` is used for an explicit override.
+
 ### Stale Lease Reallocation
 
 If an agent holds a lease that expires (e.g., the agent crashed), the next call to `allocate-task` from any agent will detect the expired lease and reallocate the ticket. The previous owner's work is considered lost.

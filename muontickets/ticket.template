@@ -40,5 +40,5 @@ Write a single-sentence goal.
 
 ## Queue Lifecycle (if allocated)
 - [ ] Add progress with `mt comment <id> "..."`
-- [ ] If blocked/failing, run `mt fail-task <id> --error "..."`
+- [ ] If blocked/failing, run `mt fail-task <id> --owner <owner> --error "..."`
 - [ ] On completion, move to `needs_review` then `done`

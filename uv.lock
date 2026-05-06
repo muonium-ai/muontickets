@@ -4,8 +4,7 @@ requires-python = ">=3.10"
 
 [[package]]
 name = "muontickets"
-version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },
 ]

@@ -150,7 +150,8 @@ Queue-mode lifecycle extension:
 - Allocation creates a lease (`lease_expires_at`, default 5 minutes).
 - Expired leases can be reallocated to another agent.
 - Reallocation and retry-limit events are written to `tickets/incidents.log`.
-- `mt fail-task <id> --error "..."` increments `retry_count` and re-queues.
+- `mt fail-task <id> --owner <agent> --error "..."` increments `retry_count` and re-queues.
+- `fail-task --owner` must match the ticket's current `owner` or `allocated_to`; use `--force` only for deliberate manual overrides.
 - When `retry_count >= retry_limit`, ticket is moved to `tickets/errors/` for manual resolution.
 
 ------------------------------------------------------------------------
@@ -172,7 +173,7 @@ Queue operator runbook:
 1.  Allocate one ticket with `mt allocate-task --owner agent-X`.
 2.  Post progress with `mt comment T-xxxx "..."` while implementing.
 3.  On success: `mt set-status T-xxxx needs_review` then `mt done T-xxxx`.
-4.  On execution failure: `mt fail-task T-xxxx --error "..."` to increment retries and re-queue.
+4.  On execution failure: `mt fail-task T-xxxx --owner agent-X --error "..."` to increment retries and re-queue.
 5.  For retry exhaustion, triage entries moved to `tickets/errors/` and inspect incidents in `tickets/incidents.log`.
 
 In submodule-based repos, command path is typically:
