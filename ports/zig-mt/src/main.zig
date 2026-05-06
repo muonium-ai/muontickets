@@ -1,4 +1,169 @@
-const std = @import("std");
+const zig_std = @import("std");
+
+var runtime_io: zig_std.Io = undefined;
+
+const CompatFile = struct {
+    file: zig_std.Io.File,
+
+    pub fn stdout() CompatFile {
+        return .{ .file = zig_std.Io.File.stdout() };
+    }
+
+    pub fn writeAll(self: CompatFile, bytes: []const u8) !void {
+        try self.file.writeStreamingAll(runtime_io, bytes);
+    }
+};
+
+const CompatDirIterator = struct {
+    inner: zig_std.Io.Dir.Iterator,
+
+    pub fn next(self: *CompatDirIterator) !?zig_std.Io.Dir.Entry {
+        return try self.inner.next(runtime_io);
+    }
+};
+
+const CompatDirWalker = struct {
+    inner: zig_std.Io.Dir.Walker,
+
+    pub fn next(self: *CompatDirWalker) !?zig_std.Io.Dir.Walker.Entry {
+        return try self.inner.next(runtime_io);
+    }
+
+    pub fn deinit(self: *CompatDirWalker) void {
+        self.inner.deinit();
+    }
+};
+
+const CompatDir = struct {
+    dir: zig_std.Io.Dir,
+
+    const Stat = struct {
+        mtime: i128,
+    };
+
+    pub fn access(self: CompatDir, path: []const u8, options: zig_std.Io.Dir.AccessOptions) !void {
+        try self.dir.access(runtime_io, path, options);
+    }
+
+    pub fn openDir(self: CompatDir, path: []const u8, options: zig_std.Io.Dir.OpenOptions) !CompatDir {
+        return .{ .dir = try self.dir.openDir(runtime_io, path, options) };
+    }
+
+    pub fn close(self: CompatDir) void {
+        self.dir.close(runtime_io);
+    }
+
+    pub fn iterate(self: CompatDir) CompatDirIterator {
+        return .{ .inner = self.dir.iterate() };
+    }
+
+    pub fn walk(self: CompatDir, allocator: zig_std.mem.Allocator) !CompatDirWalker {
+        return .{ .inner = try self.dir.walk(allocator) };
+    }
+
+    pub fn writeFile(self: CompatDir, options: zig_std.Io.Dir.WriteFileOptions) !void {
+        try self.dir.writeFile(runtime_io, options);
+    }
+
+    pub fn realpathAlloc(self: CompatDir, allocator: zig_std.mem.Allocator, path: []const u8) ![]u8 {
+        return try self.dir.realPathFileAlloc(runtime_io, path, allocator);
+    }
+
+    pub fn readFileAlloc(self: CompatDir, allocator: zig_std.mem.Allocator, path: []const u8, limit: usize) ![]u8 {
+        return try self.dir.readFileAlloc(runtime_io, path, allocator, .limited(limit));
+    }
+
+    pub fn makePath(self: CompatDir, path: []const u8) !void {
+        try self.dir.createDirPath(runtime_io, path);
+    }
+
+    pub fn rename(self: CompatDir, old_path: []const u8, new_path: []const u8) !void {
+        try zig_std.Io.Dir.rename(self.dir, old_path, self.dir, new_path, runtime_io);
+    }
+
+    pub fn statFile(self: CompatDir, path: []const u8) !Stat {
+        const stat = try self.dir.statFile(runtime_io, path, .{});
+        return .{ .mtime = stat.mtime.nanoseconds };
+    }
+};
+
+const CompatTime = struct {
+    pub fn timestamp() i64 {
+        const now = zig_std.Io.Timestamp.now(runtime_io, .real);
+        return @intCast(@divFloor(now.nanoseconds, zig_std.time.ns_per_s));
+    }
+};
+
+const CompatProcess = struct {
+    pub const Init = zig_std.process.Init;
+
+    pub fn exit(status: u8) noreturn {
+        zig_std.process.exit(status);
+    }
+
+    pub const Child = struct {
+        pub const RunOptions = struct {
+            allocator: zig_std.mem.Allocator,
+            argv: []const []const u8,
+            cwd: ?[]const u8 = null,
+            max_output_bytes: usize = zig_std.math.maxInt(usize),
+        };
+
+        pub const Term = union(enum) {
+            Exited: u8,
+            Other,
+        };
+
+        pub const RunResult = struct {
+            term: Term,
+            stdout: []u8,
+            stderr: []u8,
+        };
+
+        pub fn run(options: RunOptions) !RunResult {
+            const output_limit = zig_std.Io.Limit.limited(options.max_output_bytes);
+            const result = try zig_std.process.run(options.allocator, runtime_io, .{
+                .argv = options.argv,
+                .cwd = if (options.cwd) |path| .{ .path = path } else .inherit,
+                .stdout_limit = output_limit,
+                .stderr_limit = output_limit,
+            });
+            return .{
+                .term = switch (result.term) {
+                    .exited => |code| .{ .Exited = code },
+                    else => .Other,
+                },
+                .stdout = result.stdout,
+                .stderr = result.stderr,
+            };
+        }
+    };
+};
+
+const std = struct {
+    pub const AutoHashMap = zig_std.AutoHashMap;
+    pub const StringHashMap = zig_std.StringHashMap;
+    pub const array_list = zig_std.array_list;
+    pub const ascii = zig_std.ascii;
+    pub const debug = zig_std.debug;
+    pub const fmt = zig_std.fmt;
+    pub const heap = zig_std.heap;
+    pub const mem = zig_std.mem;
+    pub const process = CompatProcess;
+    pub const time = CompatTime;
+
+    pub const fs = struct {
+        pub const File = CompatFile;
+        pub const path = zig_std.fs.path;
+        pub const max_path_bytes = zig_std.fs.max_path_bytes;
+        pub const max_name_bytes = zig_std.fs.max_name_bytes;
+
+        pub fn cwd() CompatDir {
+            return .{ .dir = zig_std.Io.Dir.cwd() };
+        }
+    };
+};
+
 const c = @cImport({
     @cInclude("sqlite3.h");
 });
@@ -371,7 +536,7 @@ fn cmdInit(allocator: std.mem.Allocator) !void {
     }
 }
 
-fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+fn cmdNew(allocator: std.mem.Allocator, cmd_args: []const [:0]const u8) !void {
     if (cmd_args.len < 1) {
         std.debug.print("usage: mt-zig new <title> [--priority <p0|p1|p2>] [--type <spec|code|tests|docs|refactor|chore>] [--effort <xs|s|m|l|xl|xxl>] [--label <label>]... [--tag <tag>]... [--depends-on <T-xxxxxx>]... [--goal <text>]\n", .{});
         std.process.exit(2);
@@ -716,7 +881,7 @@ fn bodyExcerptFirstLines(allocator: std.mem.Allocator, body: []const u8, max_lin
     while (it.next()) |line| {
         if (count >= max_lines) break;
         if (count > 0) try out.append('\n');
-        try out.appendSlice(std.mem.trimRight(u8, line, " \t\r"));
+        try out.appendSlice(std.mem.trimEnd(u8, line, " \t\r"));
         count += 1;
     }
     return out.toOwnedSlice();
@@ -818,8 +983,8 @@ fn setMetaField(allocator: std.mem.Allocator, content: []const u8, key: []const 
             continue;
         }
 
-        if (in_frontmatter and std.mem.startsWith(u8, std.mem.trimLeft(u8, line, " \t"), key)) {
-            const t = std.mem.trimLeft(u8, line, " \t");
+        if (in_frontmatter and std.mem.startsWith(u8, std.mem.trimStart(u8, line, " \t"), key)) {
+            const t = std.mem.trimStart(u8, line, " \t");
             if (t.len > key.len and t[key.len] == ':') {
                 try out.appendSlice(key);
                 try out.appendSlice(": ");
@@ -1067,7 +1232,7 @@ fn appendIncident(allocator: std.mem.Allocator, repo: []const u8, message: []con
 
     const now_iso = try nowUtcIsoTimestamp(allocator);
     defer allocator.free(now_iso);
-    try out.writer().print("{s} {s}\n", .{ now_iso, message });
+    try out.print("{s} {s}\n", .{ now_iso, message });
     try writeFileText(incidents_path, out.items);
 }
 
@@ -1155,7 +1320,7 @@ fn defaultBranch(allocator: std.mem.Allocator, id: []const u8, title: []const u8
     return std.fmt.allocPrint(allocator, "bug/{s}-{s}", .{ id_lower, slug });
 }
 
-fn getOptValue(args: []const [:0]u8, name: []const u8) ?[]const u8 {
+fn getOptValue(args: []const [:0]const u8, name: []const u8) ?[]const u8 {
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], name) and i + 1 < args.len) return args[i + 1];
@@ -1163,7 +1328,7 @@ fn getOptValue(args: []const [:0]u8, name: []const u8) ?[]const u8 {
     return null;
 }
 
-fn hasFlag(args: []const [:0]u8, name: []const u8) bool {
+fn hasFlag(args: []const [:0]const u8, name: []const u8) bool {
     for (args) |a| {
         if (std.mem.eql(u8, a, name)) return true;
     }
@@ -1390,7 +1555,7 @@ fn cmdArchive(allocator: std.mem.Allocator, id: []const u8, force: bool) !void {
     try printStdout(allocator, "archived {s} -> {s}\n", .{ id, rel });
 }
 
-fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+fn cmdValidate(allocator: std.mem.Allocator, cmd_args: []const [:0]const u8) !void {
     const max_claimed_raw = getOptValue(cmd_args, "--max-claimed-per-owner") orelse "2";
     const max_claimed = std.fmt.parseInt(u32, max_claimed_raw, 10) catch {
         std.debug.print("invalid --max-claimed-per-owner: {s}\n", .{max_claimed_raw});
@@ -1644,7 +1809,7 @@ fn cmdComment(allocator: std.mem.Allocator, id: []const u8, text: []const u8) !v
     std.debug.print("commented on {s}\n", .{id});
 }
 
-fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]const u8) !void {
     const owner = getOptValue(cmd_args, "--owner") orelse {
         std.debug.print("pick requires --owner <owner>\n", .{});
         std.process.exit(2);
@@ -1715,7 +1880,10 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         for (prof.labels) |lbl| {
             var already = false;
             for (required_labels.items) |existing| {
-                if (std.mem.eql(u8, existing, lbl)) { already = true; break; }
+                if (std.mem.eql(u8, existing, lbl)) {
+                    already = true;
+                    break;
+                }
             }
             if (!already) try required_labels.append(lbl);
         }
@@ -1724,7 +1892,10 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             defer intersected.deinit();
             for (type_candidates.items) |tc| {
                 for (prof.types) |pt| {
-                    if (std.mem.eql(u8, tc, pt)) { try intersected.append(tc); break; }
+                    if (std.mem.eql(u8, tc, pt)) {
+                        try intersected.append(tc);
+                        break;
+                    }
                 }
             }
             type_candidates.clearRetainingCapacity();
@@ -1743,7 +1914,10 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
         for (prof.labels) |lbl| {
             var already = false;
             for (required_labels.items) |existing| {
-                if (std.mem.eql(u8, existing, lbl)) { already = true; break; }
+                if (std.mem.eql(u8, existing, lbl)) {
+                    already = true;
+                    break;
+                }
             }
             if (!already) try required_labels.append(lbl);
         }
@@ -1752,7 +1926,10 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             defer intersected.deinit();
             for (type_candidates.items) |tc| {
                 for (prof.types) |pt| {
-                    if (std.mem.eql(u8, tc, pt)) { try intersected.append(tc); break; }
+                    if (std.mem.eql(u8, tc, pt)) {
+                        try intersected.append(tc);
+                        break;
+                    }
                 }
             }
             type_candidates.clearRetainingCapacity();
@@ -1830,7 +2007,10 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
             const tp = parseMetaField(content, "type") orelse "";
             var type_match = false;
             for (type_candidates.items) |tc| {
-                if (std.mem.eql(u8, tp, tc)) { type_match = true; break; }
+                if (std.mem.eql(u8, tp, tc)) {
+                    type_match = true;
+                    break;
+                }
             }
             if (!type_match) continue;
         }
@@ -1924,7 +2104,7 @@ fn cmdPick(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     return;
 }
 
-fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]const u8) !void {
     const owner = getOptValue(cmd_args, "--owner") orelse {
         std.debug.print("allocate-task requires --owner <owner>\n", .{});
         std.process.exit(2);
@@ -2002,7 +2182,10 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
         for (prof.labels) |lbl| {
             var already = false;
             for (required_labels.items) |existing| {
-                if (std.mem.eql(u8, existing, lbl)) { already = true; break; }
+                if (std.mem.eql(u8, existing, lbl)) {
+                    already = true;
+                    break;
+                }
             }
             if (!already) try required_labels.append(lbl);
         }
@@ -2011,7 +2194,10 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
             defer intersected.deinit();
             for (type_candidates.items) |tc| {
                 for (prof.types) |pt| {
-                    if (std.mem.eql(u8, tc, pt)) { try intersected.append(tc); break; }
+                    if (std.mem.eql(u8, tc, pt)) {
+                        try intersected.append(tc);
+                        break;
+                    }
                 }
             }
             type_candidates.clearRetainingCapacity();
@@ -2030,7 +2216,10 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
         for (prof.labels) |lbl| {
             var already = false;
             for (required_labels.items) |existing| {
-                if (std.mem.eql(u8, existing, lbl)) { already = true; break; }
+                if (std.mem.eql(u8, existing, lbl)) {
+                    already = true;
+                    break;
+                }
             }
             if (!already) try required_labels.append(lbl);
         }
@@ -2039,7 +2228,10 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
             defer intersected.deinit();
             for (type_candidates.items) |tc| {
                 for (prof.types) |pt| {
-                    if (std.mem.eql(u8, tc, pt)) { try intersected.append(tc); break; }
+                    if (std.mem.eql(u8, tc, pt)) {
+                        try intersected.append(tc);
+                        break;
+                    }
                 }
             }
             type_candidates.clearRetainingCapacity();
@@ -2125,7 +2317,10 @@ fn cmdAllocateTask(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void
             const tp = parseMetaField(content, "type") orelse "";
             var type_match = false;
             for (type_candidates.items) |tc| {
-                if (std.mem.eql(u8, tp, tc)) { type_match = true; break; }
+                if (std.mem.eql(u8, tp, tc)) {
+                    type_match = true;
+                    break;
+                }
             }
             if (!type_match) continue;
         }
@@ -2383,7 +2578,7 @@ fn cmdFailTask(allocator: std.mem.Allocator, id: []const u8, err_text: []const u
     try printStdout(allocator, "{s} re-queued for retry ({d}/{d})\n", .{ id, retry_count, configured_retry_limit });
 }
 
-fn cmdGraph(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+fn cmdGraph(allocator: std.mem.Allocator, cmd_args: []const [:0]const u8) !void {
     const mermaid = hasFlag(cmd_args, "--mermaid");
     const open_only = hasFlag(cmd_args, "--open-only");
 
@@ -2425,7 +2620,7 @@ fn cmdGraph(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     if (mermaid) try printStdout(allocator, "```\n", .{});
 }
 
-fn cmdExport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+fn cmdExport(allocator: std.mem.Allocator, cmd_args: []const [:0]const u8) !void {
     const format = getOptValue(cmd_args, "--format") orelse "json";
     if (!std.mem.eql(u8, format, "json") and !std.mem.eql(u8, format, "jsonl")) {
         std.debug.print("Unsupported format: {s}\n", .{format});
@@ -2617,7 +2812,7 @@ fn sqliteBindText(stmt: *c.sqlite3_stmt, idx: c_int, text: []const u8) !void {
     if (rc != c.SQLITE_OK) return error.SqliteError;
 }
 
-fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]const u8) !void {
     const repo = try findRepoRoot(allocator);
     defer allocator.free(repo);
 
@@ -2931,7 +3126,7 @@ fn cmdReport(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     }
 }
 
-fn cmdVersion(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+fn cmdVersion(allocator: std.mem.Allocator, cmd_args: []const [:0]const u8) !void {
     const as_json = hasFlag(cmd_args, "--json");
     const repo = try findRepoRoot(allocator);
     defer allocator.free(repo);
@@ -2961,7 +3156,7 @@ fn cmdVersion(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     }
 }
 
-fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+fn cmdLs(allocator: std.mem.Allocator, cmd_args: []const [:0]const u8) !void {
     const status_filter = getOptValue(cmd_args, "--status");
     if (status_filter != null and !statusAllowed(status_filter.?)) {
         std.debug.print("invalid status: {s}\n", .{status_filter.?});
@@ -3107,9 +3302,9 @@ const MaintenanceRule = struct {
 };
 
 const maint_categories = [_][]const u8{
-    "security",        "deps",     "code-health",      "performance",
-    "database",        "infrastructure", "observability",
-    "testing",         "docs",
+    "security", "deps",           "code-health",   "performance",
+    "database", "infrastructure", "observability", "testing",
+    "docs",
 };
 
 const maintenance_rules = [_]MaintenanceRule{
@@ -3385,14 +3580,15 @@ const default_maintain_config =
 ;
 
 const source_extensions = [_][]const u8{
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".c", ".h",
-    ".cpp", ".java", ".rb", ".sh", ".bash", ".zsh", ".yaml", ".yml",
-    ".toml", ".cfg", ".ini", ".json", ".xml", ".zig",
+    ".py",  ".js",   ".ts",   ".jsx", ".tsx",  ".go",  ".rs",   ".c",   ".h",
+    ".cpp", ".java", ".rb",   ".sh",  ".bash", ".zsh", ".yaml", ".yml", ".toml",
+    ".cfg", ".ini",  ".json", ".xml", ".zig",
 };
 
 const skip_dir_names = [_][]const u8{
-    ".git", "node_modules", "__pycache__", ".venv", "venv",
-    "target", "zig-out", "zig-cache", "build", "dist", ".tox",
+    ".git",   "node_modules", "__pycache__", ".venv", "venv",
+    "target", "zig-out",      "zig-cache",   "build", "dist",
+    ".tox",
 };
 
 fn isMaintSkipDir(name: []const u8) bool {
@@ -3891,29 +4087,28 @@ fn generateDetectedConfig(allocator: std.mem.Allocator, repo: []const u8) ![]u8 
         if (std.mem.eql(u8, s, "terraform")) has_terraform = true;
     }
     var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
-    try w.print("# tickets/maintain.yaml\n# Auto-generated by mt maintain init-config --detect\n# Detected stacks: {s}\n\n", .{if (stacks.len == 0) "none" else stack_names.items});
-    try w.writeAll("settings:\n  log_file: tickets/maintain.log\n  timeout: 60\n  enabled: true\n\n");
+    try buf.print("# tickets/maintain.yaml\n# Auto-generated by mt maintain init-config --detect\n# Detected stacks: {s}\n\n", .{if (stacks.len == 0) "none" else stack_names.items});
+    try buf.appendSlice("settings:\n  log_file: tickets/maintain.log\n  timeout: 60\n  enabled: true\n\n");
 
     if (has_python) {
-        try w.writeAll("security:\n  cve_scanner:\n    enabled: true\n    command: pip-audit --format=json\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ndeps:\n  outdated_check:\n    enabled: true\n    command: pip list --outdated --format=json\n\ncode_health:\n  linter:\n    enabled: true\n    command: pylint {repo} --output-format=json --exit-zero\n  formatter_check:\n    enabled: true\n    command: black --check {repo} --quiet\n\ntesting:\n  test_runner:\n    enabled: true\n    command: pytest {repo} --tb=short -q\n  coverage:\n    enabled: true\n    command: coverage run -m pytest {repo} -q && coverage json -o /dev/stdout\n\n");
+        try buf.appendSlice("security:\n  cve_scanner:\n    enabled: true\n    command: pip-audit --format=json\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ndeps:\n  outdated_check:\n    enabled: true\n    command: pip list --outdated --format=json\n\ncode_health:\n  linter:\n    enabled: true\n    command: pylint {repo} --output-format=json --exit-zero\n  formatter_check:\n    enabled: true\n    command: black --check {repo} --quiet\n\ntesting:\n  test_runner:\n    enabled: true\n    command: pytest {repo} --tb=short -q\n  coverage:\n    enabled: true\n    command: coverage run -m pytest {repo} -q && coverage json -o /dev/stdout\n\n");
     } else if (has_node) {
-        try w.writeAll("security:\n  cve_scanner:\n    enabled: true\n    command: npm audit --json\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ndeps:\n  outdated_check:\n    enabled: true\n    command: npm outdated --json\n\ncode_health:\n  linter:\n    enabled: true\n    command: eslint src --format=json\n  formatter_check:\n    enabled: true\n    command: \"prettier --check 'src/**/*.{ts,tsx,js}'\"\n\ntesting:\n  test_runner:\n    enabled: true\n    command: npm test -- --json\n  coverage:\n    enabled: true\n    command: nyc --reporter=json npm test\n\n");
+        try buf.appendSlice("security:\n  cve_scanner:\n    enabled: true\n    command: npm audit --json\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ndeps:\n  outdated_check:\n    enabled: true\n    command: npm outdated --json\n\ncode_health:\n  linter:\n    enabled: true\n    command: eslint src --format=json\n  formatter_check:\n    enabled: true\n    command: \"prettier --check 'src/**/*.{ts,tsx,js}'\"\n\ntesting:\n  test_runner:\n    enabled: true\n    command: npm test -- --json\n  coverage:\n    enabled: true\n    command: nyc --reporter=json npm test\n\n");
     } else if (has_rust) {
-        try w.writeAll("security:\n  cve_scanner:\n    enabled: true\n    command: cargo audit --json\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ndeps:\n  outdated_check:\n    enabled: true\n    command: cargo outdated --format=json\n\ncode_health:\n  formatter_check:\n    enabled: true\n    command: cargo fmt --check\n\ntesting:\n  test_runner:\n    enabled: true\n    command: cargo test --message-format=json\n\n");
+        try buf.appendSlice("security:\n  cve_scanner:\n    enabled: true\n    command: cargo audit --json\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ndeps:\n  outdated_check:\n    enabled: true\n    command: cargo outdated --format=json\n\ncode_health:\n  formatter_check:\n    enabled: true\n    command: cargo fmt --check\n\ntesting:\n  test_runner:\n    enabled: true\n    command: cargo test --message-format=json\n\n");
     } else if (has_go) {
-        try w.writeAll("security:\n  cve_scanner:\n    enabled: true\n    command: govulncheck ./...\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ntesting:\n  test_runner:\n    enabled: true\n    command: go test ./...\n  coverage:\n    enabled: true\n    command: go test -coverprofile=coverage.out ./...\n\n");
+        try buf.appendSlice("security:\n  cve_scanner:\n    enabled: true\n    command: govulncheck ./...\n  secret_scanner:\n    enabled: true\n    command: gitleaks detect --source={repo} --report-format=json --no-git\n\ntesting:\n  test_runner:\n    enabled: true\n    command: go test ./...\n  coverage:\n    enabled: true\n    command: go test -coverprofile=coverage.out ./...\n\n");
     } else {
-        try w.writeAll("security:\n  secret_scanner:\n    enabled: false\n    # command: gitleaks detect --source={repo} --report-format=json --no-git\n\n");
+        try buf.appendSlice("security:\n  secret_scanner:\n    enabled: false\n    # command: gitleaks detect --source={repo} --report-format=json --no-git\n\n");
     }
 
     if (has_docker) {
-        try w.writeAll("infrastructure:\n  container_scan:\n    enabled: true\n    command: trivy image --format=json\n\n");
+        try buf.appendSlice("infrastructure:\n  container_scan:\n    enabled: true\n    command: trivy image --format=json\n\n");
     }
     if (has_terraform) {
-        try w.writeAll("infrastructure:\n  terraform_drift:\n    enabled: true\n    command: terraform plan -detailed-exitcode -json\n\n");
+        try buf.appendSlice("infrastructure:\n  terraform_drift:\n    enabled: true\n    command: terraform plan -detailed-exitcode -json\n\n");
     }
-    try w.writeAll("documentation:\n  link_checker:\n    enabled: false\n    # command: markdown-link-check {repo}/docs/**/*.md --json\n\n");
+    try buf.appendSlice("documentation:\n  link_checker:\n    enabled: false\n    # command: markdown-link-check {repo}/docs/**/*.md --json\n\n");
 
     return buf.toOwnedSlice();
 }
@@ -3931,12 +4126,12 @@ fn yamlGetValue(content: []const u8, key: []const u8) ?[]const u8 {
         if (ch == '\n' or i == content.len - 1) {
             const line_end = if (ch == '\n') i else i + 1;
             const line = content[line_start..line_end];
-            const trimmed = std.mem.trimLeft(u8, line, " \t");
+            const trimmed = std.mem.trimStart(u8, line, " \t");
             if (std.mem.startsWith(u8, trimmed, key)) {
                 const after_key = trimmed[key.len..];
                 if (after_key.len > 0 and after_key[0] == ':') {
-                    const val = std.mem.trimLeft(u8, after_key[1..], " \t");
-                    const val_trimmed = std.mem.trimRight(u8, val, " \t\r\n");
+                    const val = std.mem.trimStart(u8, after_key[1..], " \t");
+                    const val_trimmed = std.mem.trimEnd(u8, val, " \t\r\n");
                     if (val_trimmed.len > 0) return val_trimmed;
                 }
             }
@@ -4016,7 +4211,7 @@ fn getEnabledExternalTools(allocator: std.mem.Allocator, config: []const u8) ![]
     var tool_command: ?[]const u8 = null;
 
     while (lines_iter.next()) |line| {
-        const trimmed = std.mem.trimLeft(u8, line, " \t");
+        const trimmed = std.mem.trimStart(u8, line, " \t");
         if (trimmed.len == 0 or trimmed[0] == '#') continue;
 
         // Count indentation
@@ -4045,10 +4240,10 @@ fn getEnabledExternalTools(allocator: std.mem.Allocator, config: []const u8) ![]
         } else if (indent >= 4 and current_tool != null) {
             // Tool property
             if (std.mem.startsWith(u8, trimmed, "enabled:")) {
-                const val = std.mem.trimLeft(u8, trimmed[8..], " \t");
+                const val = std.mem.trimStart(u8, trimmed[8..], " \t");
                 tool_enabled = std.mem.eql(u8, val, "true");
             } else if (std.mem.startsWith(u8, trimmed, "command:")) {
-                const val = std.mem.trimLeft(u8, trimmed[8..], " \t");
+                const val = std.mem.trimStart(u8, trimmed[8..], " \t");
                 if (val.len > 0) tool_command = val;
             }
         } else if (indent == 0 and trimmed.len > 0) {
@@ -4196,27 +4391,25 @@ fn scanRuleWithConfig(allocator: std.mem.Allocator, rule: MaintenanceRule, confi
 
 fn formatSuggestionBody(allocator: std.mem.Allocator, rule: MaintenanceRule) ![]u8 {
     var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
-    try w.print("## Goal\nInvestigate and remediate: {s}\n\n## Detection Heuristic\n{s}\n", .{ rule.title, rule.detection });
+    try buf.print("## Goal\nInvestigate and remediate: {s}\n\n## Detection Heuristic\n{s}\n", .{ rule.title, rule.detection });
     if (rule.external_tool.len > 0) {
-        try w.print("\n## External Tool\n```\n{s}\n```\n", .{rule.external_tool});
+        try buf.print("\n## External Tool\n```\n{s}\n```\n", .{rule.external_tool});
     }
-    try w.print("\n## Recommended Action\n{s}\n\n## Acceptance Criteria\n- [ ] Run detection heuristic against codebase\n- [ ] Fix any issues found, or close ticket if none exist\n- [ ] Verify fix passes CI\n\n## Notes\nAuto-generated by `mt maintain create` (rule {d}, category: {s})\n", .{ rule.action, rule.id, rule.category });
+    try buf.print("\n## Recommended Action\n{s}\n\n## Acceptance Criteria\n- [ ] Run detection heuristic against codebase\n- [ ] Fix any issues found, or close ticket if none exist\n- [ ] Verify fix passes CI\n\n## Notes\nAuto-generated by `mt maintain create` (rule {d}, category: {s})\n", .{ rule.action, rule.id, rule.category });
     return buf.toOwnedSlice();
 }
 
 fn formatFindingBody(allocator: std.mem.Allocator, rule: MaintenanceRule, findings: []const Finding) ![]u8 {
     var buf = std.array_list.Managed(u8).init(allocator);
-    const w = buf.writer();
-    try w.print("## Goal\nFix detected issue: {s}\n\n## Findings\n", .{rule.title});
+    try buf.print("## Goal\nFix detected issue: {s}\n\n## Findings\n", .{rule.title});
     for (findings) |f| {
         if (f.line > 0) {
-            try w.print("- `{s}` (line {d}): {s}\n", .{ f.file, f.line, f.detail });
+            try buf.print("- `{s}` (line {d}): {s}\n", .{ f.file, f.line, f.detail });
         } else {
-            try w.print("- `{s}` (file): {s}\n", .{ f.file, f.detail });
+            try buf.print("- `{s}` (file): {s}\n", .{ f.file, f.detail });
         }
     }
-    try w.print("\n## Recommended Action\n{s}\n\n## Acceptance Criteria\n- [ ] Address all findings listed above\n- [ ] Verify fix passes CI\n\n## Notes\nAuto-detected by `mt maintain scan` (rule {d}, category: {s})\n", .{ rule.action, rule.id, rule.category });
+    try buf.print("\n## Recommended Action\n{s}\n\n## Acceptance Criteria\n- [ ] Address all findings listed above\n- [ ] Verify fix passes CI\n\n## Notes\nAuto-detected by `mt maintain scan` (rule {d}, category: {s})\n", .{ rule.action, rule.id, rule.category });
     return buf.toOwnedSlice();
 }
 
@@ -4263,7 +4456,7 @@ fn hasMaintTag(tags: []const []const u8, tag: []const u8) bool {
     return false;
 }
 
-fn cmdMaintain(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
+fn cmdMaintain(allocator: std.mem.Allocator, cmd_args: []const [:0]const u8) !void {
     if (cmd_args.len == 0) {
         std.debug.print("usage: mt-zig maintain <subcommand>\nsubcommands: init-config, doctor, list, scan, create\n", .{});
         std.process.exit(2);
@@ -4288,7 +4481,7 @@ fn cmdMaintain(allocator: std.mem.Allocator, cmd_args: []const [:0]u8) !void {
     }
 }
 
-fn cmdMaintainInitConfig(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
+fn cmdMaintainInitConfig(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     const force = hasFlag(args, "--force");
     const detect = hasFlag(args, "--detect");
     const repo = try findRepoRoot(allocator);
@@ -4358,7 +4551,7 @@ fn cmdMaintainDoctor(allocator: std.mem.Allocator) !void {
         defer allocator.free(result.stdout);
         defer allocator.free(result.stderr);
         if (result.term.Exited == 0) {
-            const found = std.mem.trimRight(u8, result.stdout, "\n\r ");
+            const found = std.mem.trimEnd(u8, result.stdout, "\n\r ");
             try printStdout(allocator, "[OK]    {s:<20} {s} -> {s}\n", .{ tool.name, binary, found });
             ok_count += 1;
         } else {
@@ -4370,7 +4563,7 @@ fn cmdMaintainDoctor(allocator: std.mem.Allocator) !void {
     if (fail_count > 0) std.process.exit(1);
 }
 
-fn cmdMaintainList(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
+fn cmdMaintainList(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     var cats = std.array_list.Managed([]const u8).init(allocator);
     defer cats.deinit();
     var rule_ids = std.array_list.Managed(i32).init(allocator);
@@ -4393,7 +4586,7 @@ fn cmdMaintainList(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
     }
 }
 
-fn parseMaintainFilterArgs(args: []const [:0]u8, cats: *std.array_list.Managed([]const u8), rule_ids: *std.array_list.Managed(i32)) !void {
+fn parseMaintainFilterArgs(args: []const [:0]const u8, cats: *std.array_list.Managed([]const u8), rule_ids: *std.array_list.Managed(i32)) !void {
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--category") and i + 1 < args.len) {
@@ -4407,7 +4600,7 @@ fn parseMaintainFilterArgs(args: []const [:0]u8, cats: *std.array_list.Managed([
     }
 }
 
-fn cmdMaintainScan(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
+fn cmdMaintainScan(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     var cats = std.array_list.Managed([]const u8).init(allocator);
     defer cats.deinit();
     var rule_ids = std.array_list.Managed(i32).init(allocator);
@@ -4552,7 +4745,7 @@ fn cmdMaintainScan(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
     if (fail_count > 0) std.process.exit(1);
 }
 
-fn cmdMaintainCreate(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
+fn cmdMaintainCreate(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     var cats = std.array_list.Managed([]const u8).init(allocator);
     defer cats.deinit();
     var rule_ids = std.array_list.Managed(i32).init(allocator);
@@ -4710,16 +4903,17 @@ fn cmdMaintainCreate(allocator: std.mem.Allocator, args: []const [:0]u8) !void {
     const would_be: []const u8 = if (dry_run) "would be " else "";
     std.debug.print("{d} ticket(s) {s}created, {d} skipped (duplicates), {d} skipped (scan passed)\n", .{ created, would_be, skipped_dedup, skipped_pass });
 }
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+pub fn main(init: std.process.Init) !void {
+    runtime_io = init.io;
 
-    const allocator = gpa.allocator();
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    const allocator = init.gpa;
+    var args_arena = std.heap.ArenaAllocator.init(allocator);
+    defer args_arena.deinit();
+
+    const args = try init.minimal.args.toSlice(args_arena.allocator());
 
     if (args.len < 2) {
-        try cmdVersion(allocator, &[_][:0]u8{});
+        try cmdVersion(allocator, &[_][:0]const u8{});
         return;
     }
 
