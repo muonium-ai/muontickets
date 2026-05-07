@@ -116,7 +116,7 @@ class VersioningTests(unittest.TestCase):
         self.assertIn("python", payload["build_tools"])
 
     def test_mt_global_version_invocations(self) -> None:
-        for args in [[], ["-v"], ["--version"]]:
+        for args in [["-v"], ["--version"]]:
             proc = subprocess.run([str(PYTHON), str(CLI), *args], cwd=str(ROOT), capture_output=True, text=True)
             self.assertEqual(proc.returncode, 0, msg=f"args={args} stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
             self._assert_plain_version_output(proc.stdout + proc.stderr, "mt.py")

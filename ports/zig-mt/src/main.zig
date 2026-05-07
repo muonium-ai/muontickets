@@ -255,7 +255,7 @@ const ticket_types = [_][]const u8{ "spec", "code", "tests", "docs", "refactor",
 const default_template =
     \\---
     \\id: T-000000
-    \\title: Template: replace title
+    \\title: "Template: replace title"
     \\status: ready
     \\priority: p1
     \\type: code

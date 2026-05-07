@@ -118,6 +118,71 @@ class CliError(Exception):
     """User-facing CLI error that should not produce a traceback."""
 
 
+def _load_yaml_tiny(text: str) -> Dict[str, Any]:
+    data: Dict[str, Any] = {}
+    current_list_key: Optional[str] = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Block-style list item: "- value"
+        if line.startswith("- ") and current_list_key is not None:
+            item = line[2:].strip().strip('"').strip("'")
+            if item:
+                data[current_list_key].append(item)
+            continue
+        # Any non-list-item line ends the current list context
+        current_list_key = None
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        k = k.strip()
+        v = v.strip()
+        if v.lower() in ("null", "none", "~"):
+            data[k] = None
+            continue
+        if v == "":
+            # Could be start of a block-style list or a null value;
+            # assume block list and let list-item lines fill it.
+            data[k] = []
+            current_list_key = k
+            continue
+        if v.startswith("[") and v.endswith("]"):
+            inner = v[1:-1].strip()
+            if not inner:
+                data[k] = []
+            else:
+                parts = [p.strip().strip('"').strip("'") for p in inner.split(",")]
+                data[k] = [p for p in parts if p]
+            continue
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            v = v[1:-1]
+        # Try parse numbers
+        if re.fullmatch(r"-?\d+(\.\d+)?", v):
+            try:
+                data[k] = float(v) if "." in v else int(v)
+                continue
+            except Exception:
+                pass
+        data[k] = v
+    # Convert any remaining empty block-list placeholders that got
+    # no items back to empty list (they already are [])
+    return data
+
+
+def _format_yaml_parse_error(ex: Exception) -> str:
+    mark = getattr(ex, "problem_mark", None)
+    problem = getattr(ex, "problem", None) or str(ex).splitlines()[0]
+    context = getattr(ex, "context", None)
+    detail = f"{context}: {problem}" if context else str(problem)
+    if mark is not None:
+        return (
+            "YAML frontmatter parse error "
+            f"at line {mark.line + 1}, column {mark.column + 1}: {detail}"
+        )
+    return f"YAML frontmatter parse error: {detail}"
+
+
 def load_yaml(text: str) -> Dict[str, Any]:
     """
     Prefer PyYAML if available; otherwise parse a tiny YAML subset.
@@ -125,60 +190,17 @@ def load_yaml(text: str) -> Dict[str, Any]:
     """
     try:
         import yaml  # type: ignore
+    except ImportError:
+        return _load_yaml_tiny(text)
+
+    try:
         obj = yaml.safe_load(text) or {}
-        if not isinstance(obj, dict):
-            raise ValueError("YAML frontmatter must be a mapping/object.")
-        return obj
-    except Exception:
-        data: Dict[str, Any] = {}
-        current_list_key: Optional[str] = None
-        for raw in text.splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            # Block-style list item: "- value"
-            if line.startswith("- ") and current_list_key is not None:
-                item = line[2:].strip().strip('"').strip("'")
-                if item:
-                    data[current_list_key].append(item)
-                continue
-            # Any non-list-item line ends the current list context
-            current_list_key = None
-            if ":" not in line:
-                continue
-            k, v = line.split(":", 1)
-            k = k.strip()
-            v = v.strip()
-            if v.lower() in ("null", "none", "~"):
-                data[k] = None
-                continue
-            if v == "":
-                # Could be start of a block-style list or a null value;
-                # assume block list and let list-item lines fill it.
-                data[k] = []
-                current_list_key = k
-                continue
-            if v.startswith("[") and v.endswith("]"):
-                inner = v[1:-1].strip()
-                if not inner:
-                    data[k] = []
-                else:
-                    parts = [p.strip().strip('"').strip("'") for p in inner.split(",")]
-                    data[k] = [p for p in parts if p]
-                continue
-            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
-                v = v[1:-1]
-            # Try parse numbers
-            if re.fullmatch(r"-?\d+(\.\d+)?", v):
-                try:
-                    data[k] = float(v) if "." in v else int(v)
-                    continue
-                except Exception:
-                    pass
-            data[k] = v
-        # Convert any remaining empty block-list placeholders that got
-        # no items back to empty list (they already are [])
-        return data
+    except yaml.YAMLError as ex:  # type: ignore[attr-defined]
+        raise ValueError(_format_yaml_parse_error(ex)) from ex
+
+    if not isinstance(obj, dict):
+        raise ValueError("YAML frontmatter must be a mapping/object.")
+    return obj
 
 def dump_yaml(data: Dict[str, Any]) -> str:
     try:
@@ -1192,7 +1214,7 @@ def append_incident(repo_root: str, message: str) -> None:
 def default_ticket_template_text() -> str:
     return """---
 id: T-000000
-title: Template: replace title
+title: "Template: replace title"
 status: ready
 priority: p1
 type: code
@@ -1377,6 +1399,11 @@ This repository uses MuonTickets for agent-friendly coordination.
         if tracked is None or tracked < scanned:
             write_last_ticket_number(repo, scanned)
             print(f"updated {last_ticket_id_path(repo)} to T-{scanned:06d}")
+    print()
+    print("Next:")
+    print('  mt new "Title"             create a ticket')
+    print("  mt ls                      list open tickets")
+    print("  mt pick --owner <name>     claim the best ready ticket")
     return 0
 
 @with_repo_lock
@@ -1470,6 +1497,13 @@ Write a single-sentence goal.
         return 2
     write_ticket(Ticket(path=path, meta=meta, body=body))
     print(path)
+    rel_path = os.path.relpath(path, repo)
+    print(f"Created {tid}")
+    print(f"Path: {rel_path}")
+    print("Next:")
+    print(f"  mt show {tid}")
+    print(f"  mt claim {tid} --owner <name>")
+    print("  mt ls")
     return 0
 
 def cmd_ls(args: argparse.Namespace) -> int:
@@ -1481,7 +1515,7 @@ def cmd_ls(args: argparse.Namespace) -> int:
         meta = t.meta
         if "_parse_error" in meta:
             if args.show_invalid:
-                rows.append(f"{os.path.basename(t.path)}  PARSE_ERROR  {meta['_parse_error']}")
+                rows.append(f"{os.path.relpath(t.path, repo)}  PARSE_ERROR  {meta['_parse_error']}")
             continue
         meta = normalize_meta(meta)
         if args.status and meta.get("status") != args.status:
@@ -1509,6 +1543,12 @@ def cmd_ls(args: argparse.Namespace) -> int:
         print("-" * 110)
         for r in rows:
             print(r)
+    else:
+        print("No tickets matched.")
+        if args.status or args.owner is not None or args.priority or args.type or args.label:
+            print("Try less restrictive filters.")
+        else:
+            print('Create one with: mt new "Title"')
     return 0
 
 def cmd_show(args: argparse.Namespace) -> int:
@@ -1941,7 +1981,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
     for t in tickets:
         meta = t.meta
         if "_parse_error" in meta:
-            errors.append(f"{os.path.basename(t.path)}: {meta['_parse_error']}")
+            errors.append(f"{os.path.relpath(t.path, repo)}: {meta['_parse_error']}")
             continue
         meta = normalize_meta(meta)
 
@@ -3884,10 +3924,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     return p
 
+def cmd_guidance() -> int:
+    print("MuonTickets CLI")
+    print()
+    print("Common next steps:")
+    print("  mt init                   create or verify a tickets board")
+    print('  mt new "Title"            create a ticket')
+    print("  mt ls                     list tickets")
+    print("  mt pick --owner <name>    claim the best ready ticket")
+    print("  mt version                show version and runtime details")
+    return 0
+
 def main(argv: Optional[List[str]] = None) -> int:
     args_list = list(argv) if argv is not None else sys.argv[1:]
     if len(args_list) == 0:
-        return cmd_version(argparse.Namespace(json=False))
+        return cmd_guidance()
     if args_list[0] in ("-v", "--version"):
         return cmd_version(argparse.Namespace(json=False))
 

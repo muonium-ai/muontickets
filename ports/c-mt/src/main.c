@@ -48,7 +48,7 @@ static int read_all_text(const char *path, char **out_text);
 static const char *DEFAULT_TEMPLATE_TEXT =
     "---\n"
     "id: T-000000\n"
-    "title: Template: replace title\n"
+    "title: \"Template: replace title\"\n"
     "status: ready\n"
     "priority: p1\n"
     "type: code\n"
@@ -500,7 +500,7 @@ static int write_example_ticket(const char *tickets_dir, int ticket_n) {
     fprintf(f,
             "---\n"
             "id: T-%06d\n"
-            "title: Example: replace this ticket\n"
+            "title: \"Example: replace this ticket\"\n"
             "status: ready\n"
             "priority: p2\n"
             "type: chore\n"
