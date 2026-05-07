@@ -211,7 +211,7 @@ install_ticket_template() {
   cat > "$template_dst" <<'EOF'
 ---
 id: T-000000
-title: Template: replace title
+title: "Template: replace title"
 status: ready
 priority: p1
 type: code

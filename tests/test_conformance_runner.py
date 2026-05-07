@@ -303,7 +303,7 @@ class ConformanceRunnerTests(unittest.TestCase):
                 """\
                 ---
                 id: T-000000
-                title: Template: replace title
+                title: "Template: replace title"
                 status: blocked
                 priority: p0
                 type: docs
@@ -472,7 +472,7 @@ class ConformanceRunnerTests(unittest.TestCase):
                 """\
                 ---
                 id: T-000000
-                title: Template: replace title
+                title: "Template: replace title"
                 status: blocked
                 priority: p0
                 type: docs

@@ -56,6 +56,14 @@ Bad frontmatter should be reported.
         with self.assertRaisesRegex(ValueError, "YAML frontmatter parse error"):
             mt.load_yaml('id: T-000002\ntitle: "unterminated\n')
 
+    def test_packaged_ticket_template_is_valid_yaml(self) -> None:
+        template = (ROOT / "muontickets" / "ticket.template").read_text(encoding="utf-8")
+
+        meta, body = mt.split_frontmatter(template)
+
+        self.assertEqual(meta["title"], "Template: replace title")
+        self.assertIn("## Goal", body)
+
     def test_load_yaml_uses_tiny_parser_only_when_pyyaml_is_unavailable(self) -> None:
         real_import = builtins.__import__
 
@@ -97,6 +105,20 @@ Bad frontmatter should be reported.
             self.assertIn("tickets/T-000002.md", result.stdout)
             self.assertIn("PARSE_ERROR", result.stdout)
             self.assertIn("YAML frontmatter parse error", result.stdout)
+
+    def test_show_reports_malformed_target_ticket_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            workdir = Path(td)
+            self._init_repo(workdir)
+            self._write_bad_ticket(workdir)
+
+            result = self.run_cli(workdir, "show", "T-000002")
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stdout, "")
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertIn("tickets/T-000002.md", result.stderr)
+            self.assertIn("YAML frontmatter parse error", result.stderr)
 
 
 if __name__ == "__main__":

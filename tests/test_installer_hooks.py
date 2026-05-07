@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from typing import Optional
 
+from muontickets import mt
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.sh"
@@ -22,7 +24,7 @@ class InstallerHookTests(unittest.TestCase):
         uv.chmod(0o755)
         return bin_dir
 
-    def _init_project_with_muontickets_fixture(self, root: Path) -> tuple[Path, str]:
+    def _init_project_with_muontickets_fixture(self, root: Path, include_template: bool = True) -> tuple[Path, str]:
         project = root / "project"
         project.mkdir()
         self._run(["git", "init", "-q"], project).check_returncode()
@@ -33,7 +35,8 @@ class InstallerHookTests(unittest.TestCase):
         (fixture / "hooks" / "pre-commit").write_text(muon_hook, encoding="utf-8")
         (fixture / "mt.py").write_text("print('fixture mt')\n", encoding="utf-8")
         (fixture / "Makefile.snippet").write_text("# fixture snippet\n", encoding="utf-8")
-        (fixture / "ticket.template").write_text("---\nid: T-000000\n---\n", encoding="utf-8")
+        if include_template:
+            (fixture / "ticket.template").write_text("---\nid: T-000000\n---\n", encoding="utf-8")
 
         self._run(["git", "init", "-q"], fixture).check_returncode()
         self._run(["git", "add", "."], fixture).check_returncode()
@@ -89,6 +92,20 @@ class InstallerHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("--no-hooks", result.stdout)
         self.assertIn("pre-commit.muontickets-backup", result.stdout)
+
+    def test_fallback_ticket_template_is_valid_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fake_bin = self._write_fake_uv(root)
+            project, _ = self._init_project_with_muontickets_fixture(root, include_template=False)
+
+            installed = self._run_installer(project, fake_bin)
+
+            self.assertEqual(installed.returncode, 0, installed.stderr + installed.stdout)
+            template = (project / "tickets" / "ticket.template").read_text(encoding="utf-8")
+            meta, body = mt.split_frontmatter(template)
+            self.assertEqual(meta["title"], "Template: replace title")
+            self.assertIn("## Goal", body)
 
 
 if __name__ == "__main__":

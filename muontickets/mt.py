@@ -1303,7 +1303,11 @@ def find_ticket_by_id(repo: str, tid: str) -> Ticket:
     path = os.path.join(tickets_dir(repo), f"{tid}.md")
     if not os.path.exists(path):
         raise CliError(f"Ticket not found: {tid}")
-    t = read_ticket(path)
+    try:
+        t = read_ticket(path)
+    except ValueError as ex:
+        rel = os.path.relpath(path, repo)
+        raise CliError(f"{rel}: {ex}") from ex
     meta_id = normalize_meta(t.meta).get("id")
     if meta_id and meta_id != tid:
         raise CliError(
