@@ -34,6 +34,45 @@ class ConcurrentWriterSafetyTests(unittest.TestCase):
             lockfile = workdir / "tickets" / ".mt.lock"
             self.assertTrue(lockfile.exists(), ".mt.lock should be created by writer commands")
 
+    def test_parallel_init_creates_example_once(self):
+        """Concurrent init commands serialize example creation and ID allocation."""
+        with tempfile.TemporaryDirectory() as td:
+            workdir = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=str(workdir), check=True)
+
+            procs = [
+                subprocess.Popen(
+                    [str(PYTHON), str(CLI), "init"],
+                    cwd=str(workdir),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                for _ in range(5)
+            ]
+
+            results = []
+            for proc in procs:
+                stdout, stderr = proc.communicate(timeout=30)
+                results.append((proc.returncode, stdout, stderr))
+
+            self.assertTrue(
+                all(returncode == 0 for returncode, _stdout, _stderr in results),
+                f"concurrent init failed: {results}",
+            )
+            self.assertEqual(
+                1,
+                sum("created example ticket" in stdout for _returncode, stdout, _stderr in results),
+                f"example ticket should be created exactly once: {results}",
+            )
+            self.assertEqual(["T-000001.md"], sorted(path.name for path in (workdir / "tickets").glob("T-*.md")))
+            self.assertEqual("T-000001", (workdir / "tickets" / "last_ticket_id").read_text().strip())
+            self.assertEqual(
+                0,
+                self.run_cli(workdir, "validate").returncode,
+                "concurrently initialized board should validate",
+            )
+
     def test_parallel_claims_no_double_claim(self):
         """Two parallel claims on the same ticket: one succeeds, the other fails."""
         with tempfile.TemporaryDirectory() as td:

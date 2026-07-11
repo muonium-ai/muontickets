@@ -4,6 +4,10 @@ import json
 import subprocess
 import shutil
 import os
+import tarfile
+import tempfile
+import tomllib
+import zipfile
 
 from muontickets.mt import load_repo_version, parse_major_minor_version
 
@@ -87,6 +91,44 @@ class VersioningTests(unittest.TestCase):
         self.assertIsInstance(minor, int)
         self.assertGreaterEqual(major, 0)
         self.assertGreaterEqual(minor, 0)
+
+    def test_python_package_version_is_dynamic_from_version_file(self) -> None:
+        config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertNotIn("version", config["project"])
+        self.assertIn("version", config["project"]["dynamic"])
+        self.assertEqual("VERSION", config["tool"]["hatch"]["version"]["path"])
+
+    def test_built_python_artifacts_use_repo_version(self) -> None:
+        uv = shutil.which("uv")
+        if not uv:
+            self.skipTest("uv is required to verify Python distribution metadata")
+
+        expected = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        with tempfile.TemporaryDirectory() as td:
+            build = subprocess.run(
+                [uv, "build", "--out-dir", td],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(0, build.returncode, f"uv build failed\nstdout:\n{build.stdout}\nstderr:\n{build.stderr}")
+
+            wheel = next(Path(td).glob("*.whl"))
+            sdist = next(Path(td).glob("*.tar.gz"))
+            self.assertIn(f"-{expected}-", wheel.name)
+            self.assertIn(f"-{expected}.", sdist.name)
+
+            with zipfile.ZipFile(wheel) as archive:
+                metadata_name = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
+                wheel_metadata = archive.read(metadata_name).decode("utf-8")
+            self.assertIn(f"Version: {expected}\n", wheel_metadata)
+
+            with tarfile.open(sdist) as archive:
+                pkg_info = next(member for member in archive.getmembers() if member.name.endswith("/PKG-INFO"))
+                extracted = archive.extractfile(pkg_info)
+                self.assertIsNotNone(extracted)
+                sdist_metadata = extracted.read().decode("utf-8")
+            self.assertIn(f"Version: {expected}\n", sdist_metadata)
 
     def test_parse_major_minor_version_accepts_valid(self) -> None:
         self.assertEqual(parse_major_minor_version("0.1"), (0, 1))

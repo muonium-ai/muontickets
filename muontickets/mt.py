@@ -1341,6 +1341,7 @@ def compute_score(meta: Dict[str, Any], id_to_meta: Dict[str, Dict[str, Any]]) -
 
     return float(base + min(age_days, 365) - dep_penalty)
 
+@with_repo_lock
 def cmd_init(args: argparse.Namespace) -> int:
     repo = find_repo_root()
     tdir = tickets_dir(repo)

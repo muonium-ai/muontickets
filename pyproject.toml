@@ -1,6 +1,6 @@
 [project]
 name = "muontickets"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Git-native, file-based ticketing system for agent swarms"
 readme = "docs/README.md"
 requires-python = ">=3.10"
@@ -11,6 +11,14 @@ dependencies = [
 [build-system]
 requires = ["hatchling>=1.24.0"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "regex"
+path = "VERSION"
+pattern = "^(?P<version>\\d+\\.\\d+(?:\\.\\d+)?)$"
+
+[tool.hatch.build.targets.wheel]
+packages = ["muontickets"]
 
 [tool.uv]
 package = false

@@ -5,8 +5,11 @@ This document defines the shared version/build-info contract for `mt.py`, `rust-
 ## VERSION source of truth
 
 - The project root `VERSION` file is the canonical source of semantic version.
-- Current format is **major.minor** (for example: `0.1`).
+- The format is semantic **major.minor.patch** (for example: `1.2.0`); the
+  readers retain compatibility with legacy `major.minor` values.
 - Whitespace around the value is ignored when parsing.
+- Python package metadata is resolved dynamically from this file by Hatchling;
+  `pyproject.toml` must not contain a second, static project version.
 
 ## Parsing and validation semantics
 
@@ -14,8 +17,9 @@ All implementations should apply the same validation rules:
 
 1. Read the root `VERSION` file.
 2. Trim leading/trailing whitespace.
-3. Accept only `^([0-9]+)\.([0-9]+)$`.
-4. Parse captured values as non-negative integers (`major`, `minor`).
+3. Accept `^([0-9]+)\.([0-9]+)(?:\.([0-9]+))?$`.
+4. Parse captured values as non-negative integers (the CLI currently reports
+   `major` and `minor`; packaging preserves the complete semantic version).
 5. Reject missing or malformed content with a clear error.
 
 ## Build-info reporting contract

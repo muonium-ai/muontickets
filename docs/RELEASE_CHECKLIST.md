@@ -25,7 +25,12 @@ Run from repo root:
 ```bash
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py'
 .venv/bin/python mt.py validate
+uv build
 ```
+
+Confirm the wheel and source distribution filenames both contain the exact
+version from `VERSION`. The versioning tests fail if the dynamic package
+metadata or built artifact versions diverge from that source of truth.
 
 Optional parity smoke matrix:
 
